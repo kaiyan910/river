@@ -1,0 +1,76 @@
+/* River design tokens — 定案：variant D（A 清流的 token）。登入 / TOTP 用 A 版面，首頁用 C 三欄版面 */
+:root {
+  --radius: 0.5rem;
+  --font-sans: "Inter", "Noto Sans TC", system-ui, sans-serif;
+  --font-heading: "Inter", "Noto Sans TC", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, Menlo, monospace;
+  --text-base: 14px;
+  --row-h: 44px;
+  --background: oklch(0.985 0.004 240);
+  --foreground: oklch(0.24 0.025 255);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.24 0.025 255);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.24 0.025 255);
+  --primary: oklch(0.52 0.115 232);
+  --primary-foreground: oklch(0.985 0.005 240);
+  --secondary: oklch(0.955 0.01 240);
+  --secondary-foreground: oklch(0.24 0.025 255);
+  --muted: oklch(0.96 0.008 240);
+  --muted-foreground: oklch(0.52 0.025 255);
+  --accent: oklch(0.945 0.025 225);
+  --accent-foreground: oklch(0.35 0.08 235);
+  --destructive: oklch(0.577 0.215 27);
+  --border: oklch(0.91 0.01 250);
+  --input: oklch(0.91 0.01 250);
+  --ring: oklch(0.52 0.115 232);
+  --sidebar: oklch(0.972 0.007 240);
+  --sidebar-foreground: oklch(0.24 0.025 255);
+  --sidebar-primary: oklch(0.36 0.08 240);
+  --sidebar-primary-foreground: oklch(0.97 0.01 230);
+  --sidebar-accent: oklch(0.945 0.025 225);
+  --sidebar-accent-foreground: oklch(0.35 0.08 235);
+  --sidebar-border: oklch(0.91 0.01 250);
+  --brand: oklch(0.36 0.08 240);
+  --brand-foreground: oklch(0.97 0.01 230);
+  --status-open: oklch(0.55 0.13 240);
+  --status-approved: oklch(0.56 0.13 155);
+  --status-returned: oklch(0.62 0.15 65);
+  --status-closed: oklch(0.55 0.015 255);
+  --status-overdue: oklch(0.577 0.215 27);
+}
+
+.dark {
+  --background: oklch(0.17 0.018 252);
+  --foreground: oklch(0.95 0.006 250);
+  --card: oklch(0.205 0.02 252);
+  --card-foreground: oklch(0.95 0.006 250);
+  --popover: oklch(0.205 0.02 252);
+  --popover-foreground: oklch(0.95 0.006 250);
+  --primary: oklch(0.74 0.11 225);
+  --primary-foreground: oklch(0.18 0.03 250);
+  --secondary: oklch(0.26 0.02 252);
+  --secondary-foreground: oklch(0.95 0.006 250);
+  --muted: oklch(0.24 0.02 252);
+  --muted-foreground: oklch(0.7 0.02 250);
+  --accent: oklch(0.29 0.04 235);
+  --accent-foreground: oklch(0.92 0.04 225);
+  --destructive: oklch(0.68 0.19 25);
+  --border: oklch(0.3 0.02 252);
+  --input: oklch(0.3 0.02 252);
+  --ring: oklch(0.74 0.11 225);
+  --sidebar: oklch(0.19 0.02 252);
+  --sidebar-foreground: oklch(0.95 0.006 250);
+  --sidebar-primary: oklch(0.27 0.06 240);
+  --sidebar-primary-foreground: oklch(0.95 0.02 230);
+  --sidebar-accent: oklch(0.29 0.04 235);
+  --sidebar-accent-foreground: oklch(0.92 0.04 225);
+  --sidebar-border: oklch(0.3 0.02 252);
+  --brand: oklch(0.27 0.06 240);
+  --brand-foreground: oklch(0.95 0.02 230);
+  --status-open: oklch(0.74 0.11 235);
+  --status-approved: oklch(0.75 0.13 155);
+  --status-returned: oklch(0.8 0.13 75);
+  --status-closed: oklch(0.68 0.015 255);
+  --status-overdue: oklch(0.7 0.18 25);
+}
