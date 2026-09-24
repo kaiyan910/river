@@ -4,6 +4,7 @@
   "compilerOptions": {
     "experimentalDecorators": true,
     "emitDecoratorMetadata": true,
-    "declaration": false
+    "declaration": false,
+    "jsx": "react-jsx"
   }
 }

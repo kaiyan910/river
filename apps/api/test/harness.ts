@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { INestApplication } from '@nestjs/common';
 import { connectDatabase, type Database, migrateDatabase } from '@river/db';
+import { RecordingEmailSender } from '@river/email';
 import { createWorker } from '@river/worker';
 import { TestWorkflowEnvironment } from '@temporalio/testing';
 import { DefaultLogger, makeTelemetryFilterString, Runtime } from '@temporalio/worker';
@@ -11,7 +12,7 @@ import { createApp } from '../src/create-app.js';
 import {
   type ProvisionParticipantInput,
   provisionParticipant,
-} from '../src/participants/provision-participant.js';
+} from '../src/org/provision-participant.js';
 
 /** 測試裡瀏覽器所在的 origin；Better Auth 只信任這個 origin 送來的請求。 */
 const ORIGIN = 'http://river.test';
@@ -35,8 +36,20 @@ export class ApiClient {
     return this.request('GET', path);
   }
 
-  post(path: string, body: unknown): Promise<Response> {
+  post(path: string, body?: unknown): Promise<Response> {
     return this.request('POST', path, body);
+  }
+
+  patch(path: string, body: unknown): Promise<Response> {
+    return this.request('PATCH', path, body);
+  }
+
+  put(path: string, body?: unknown): Promise<Response> {
+    return this.request('PUT', path, body);
+  }
+
+  delete(path: string): Promise<Response> {
+    return this.request('DELETE', path);
   }
 
   private request(method: string, path: string, body?: unknown): Promise<Response> {
@@ -54,6 +67,8 @@ export class ApiClient {
 export interface TestApp {
   db: Database;
   anonymous: ApiClient;
+  /** 取代 SMTP / Resend 的 fake，記錄 api 寄出的每一封信。 */
+  emails: RecordingEmailSender;
   provisionParticipant(input: ProvisionParticipantInput): Promise<{ participantId: string }>;
   /** 用 email + 密碼登入，回傳帶著 session cookie 的 client；失敗時丟出錯誤。 */
   signIn(email: string, password: string): Promise<ApiClient>;
@@ -84,9 +99,12 @@ export async function startTestApp(): Promise<TestApp> {
     secret: 'test-secret-that-is-at-least-32-characters',
     baseURL: ORIGIN,
   });
+  const emails = new RecordingEmailSender();
   const app: INestApplication = await createApp({
     db: database.db,
     auth,
+    emailSender: emails,
+    appUrl: ORIGIN,
     temporal: temporal.client,
     taskQueue: TASK_QUEUE,
     logLevel: 'silent',
@@ -98,6 +116,7 @@ export async function startTestApp(): Promise<TestApp> {
   return {
     db: database.db,
     anonymous,
+    emails,
     provisionParticipant: (input) => provisionParticipant(auth, database.db, input),
     async signIn(email, password) {
       const res = await anonymous.post('/api/auth/sign-in/email', { email, password });
@@ -135,4 +154,11 @@ async function createIsolatedDatabase(serverUrl: string) {
       await client.end();
     },
   };
+}
+
+/** 從邀請信中取出設定密碼連結裡的 token。 */
+export function invitationToken(email: { text: string } | undefined): string {
+  const token = email?.text.match(/\/invite\/([\w-]+)/)?.[1];
+  if (!token) throw new Error(`信件裡沒有邀請連結：${email?.text}`);
+  return token;
 }

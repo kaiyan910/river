@@ -9,7 +9,7 @@ import { eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { createAuth } from '../auth/create-auth.js';
 import { apiEnvSchema, authOptionsFromEnv } from '../config.js';
-import { provisionParticipant } from '../participants/provision-participant.js';
+import { provisionParticipant } from '../org/provision-participant.js';
 
 const env = apiEnvSchema
   .extend({

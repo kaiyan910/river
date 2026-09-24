@@ -86,3 +86,24 @@ export const permissionGrants = pgTable(
   },
   (t) => [primaryKey({ columns: [t.participantId, t.permission] })],
 );
+
+/** 業務上的人員集合（例如「財務審批人」），用來指派 Task、限制發起與查看範圍；不代表平台權限。 */
+export const roles = pgTable('roles', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  name: text('name').notNull().unique(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const roleMembers = pgTable(
+  'role_members',
+  {
+    roleId: uuid('role_id')
+      .notNull()
+      .references(() => roles.id),
+    participantId: uuid('participant_id')
+      .notNull()
+      .references(() => participants.id),
+    addedAt: timestamp('added_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [primaryKey({ columns: [t.roleId, t.participantId] })],
+);

@@ -58,6 +58,7 @@ river/
 │  ├─ contracts/    # API request/response 的 Zod schema（web 與 api 共用）
 │  ├─ db/           # Drizzle schema、migrations、repository
 │  ├─ auth/         # Permission 清單、預設組合、授權檢查
+│  ├─ email/        # EmailSender（SMTP / Resend）、React Email 範本（api 與 worker 共用）
 │  └─ config/       # tsconfig / lint 共用設定
 ├─ deploy/
 │  └─ compose.yaml
@@ -82,7 +83,7 @@ river/
 - **兩類呼叫者**：
   - 瀏覽器：Better Auth 的 session cookie。
   - Service Account：`Authorization: Bearer <api key>`，只能發起被授權的 Process，可以帶 `on_behalf_of`。
-- **授權檢查**：以 `@RequirePermission(...)` decorator 搭配全域 `PermissionGuard` 實作，只檢查 Permission（清單定義在 `packages/auth`），不檢查 Designer 或 Administrator 這類組合名稱。Service Account 的 API key 驗證用另一個 Guard 處理。資料層級的存取（Initiator Role、Observer Role、Task 指派對象）在 repository 層檢查。
+- **授權檢查**：以 `@RequirePermission(...)` decorator 實作，只檢查 Permission（清單定義在 `packages/auth`），不檢查 Designer 或 Administrator 這類組合名稱；列出多個 Permission 時持有任一個即可。decorator 掛上方法層級的 `PermissionGuard`，所以一定在 Better Auth 的全域 AuthGuard 之後執行。Service Account 的 API key 驗證用另一個 Guard 處理。資料層級的存取（Initiator Role、Observer Role、Task 指派對象）在 repository 層檢查。
 - **附件**：API 發出 presigned URL，瀏覽器直接上傳到 S3，不經過 API 轉送。
 
 ## 執行引擎（apps/worker + Temporal）

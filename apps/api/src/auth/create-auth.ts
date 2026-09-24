@@ -26,7 +26,8 @@ export function createAuth(db: Database, { secret, baseURL, trustedOrigins = [] 
       },
     }),
     // 帳號只能由 Administrator 建立（或 seed script），不開放自行註冊。
-    emailAndPassword: { enabled: true, disableSignUp: true },
+    // 密碼由員工點邀請信（之後也包括重設密碼信）的連結自行設定，走 Better Auth 的 /reset-password。
+    emailAndPassword: { enabled: true, disableSignUp: true, minPasswordLength: 12 },
   });
 }
 
