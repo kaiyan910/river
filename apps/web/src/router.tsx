@@ -10,10 +10,18 @@ import type { ReactNode } from 'react';
 import { z } from 'zod';
 import { Toaster } from '@/components/toast';
 import { meQueryOptions } from '@/lib/me';
-import { canAccess, type NavItem, PARTICIPANTS, PLACEHOLDER_ITEMS, ROLES } from '@/navigation';
+import {
+  canAccess,
+  type NavItem,
+  PARTICIPANTS,
+  PLACEHOLDER_ITEMS,
+  PROCESSES,
+  ROLES,
+} from '@/navigation';
 import { ParticipantsPage } from '@/routes/admin/participants';
 import { RolesPage } from '@/routes/admin/roles';
 import { AppShell } from '@/routes/app-shell';
+import { ProcessesPage } from '@/routes/designer/processes';
 import { ForbiddenPage } from '@/routes/forbidden';
 import { HomePage } from '@/routes/home';
 import { InvitePage } from '@/routes/invite';
@@ -123,6 +131,26 @@ const rolesRoute = createRoute({
   },
 });
 
+const processesRoute = createRoute({
+  getParentRoute: () => authenticatedRoute,
+  path: '/designer/processes',
+  validateSearch: selectionSearch,
+  component: function Processes() {
+    const { me } = authenticatedRoute.useRouteContext();
+    const { id } = processesRoute.useSearch();
+    const navigate = processesRoute.useNavigate();
+    return (
+      <Guarded item={PROCESSES}>
+        <ProcessesPage
+          me={me}
+          selected={id}
+          onSelect={(next) => navigate({ search: { id: next } })}
+        />
+      </Guarded>
+    );
+  },
+});
+
 const placeholderRoutes = PLACEHOLDER_ITEMS.map((item) =>
   createRoute({
     getParentRoute: () => authenticatedRoute,
@@ -138,7 +166,13 @@ const placeholderRoutes = PLACEHOLDER_ITEMS.map((item) =>
 const routeTree = rootRoute.addChildren([
   loginRoute,
   inviteRoute,
-  authenticatedRoute.addChildren([homeRoute, participantsRoute, rolesRoute, ...placeholderRoutes]),
+  authenticatedRoute.addChildren([
+    homeRoute,
+    participantsRoute,
+    rolesRoute,
+    processesRoute,
+    ...placeholderRoutes,
+  ]),
 ]);
 
 export function createAppRouter(queryClient: QueryClient) {

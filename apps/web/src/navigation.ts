@@ -28,6 +28,12 @@ export const PARTICIPANTS: NavItem = {
   icon: Users,
   requires: 'user.manage',
 };
+export const PROCESSES: NavItem = {
+  to: '/designer/processes',
+  label: '流程設計',
+  icon: Workflow,
+  requires: 'process.edit',
+};
 export const ROLES: NavItem = {
   to: '/admin/roles',
   label: 'Role',
@@ -42,7 +48,7 @@ export const NAV_GROUPS: NavItem[][] = [
     { to: '/tasks', label: '我的待辦', icon: Inbox },
     { to: '/requests', label: '我的申請', icon: FileText },
   ],
-  [{ to: '/designer/processes', label: '流程設計', icon: Workflow, requires: 'process.edit' }],
+  [PROCESSES],
   [
     PARTICIPANTS,
     ROLES,
@@ -61,7 +67,7 @@ export function canAccess(item: NavItem, permissions: readonly Permission[]): bo
   return !item.requires || permissions.includes(item.requires);
 }
 
-const IMPLEMENTED: NavItem[] = [HOME, PARTICIPANTS, ROLES];
+const IMPLEMENTED: NavItem[] = [HOME, PARTICIPANTS, ROLES, PROCESSES];
 
 /** 還沒有實作內容、先以佔位頁接好路由的導覽項目。 */
 export const PLACEHOLDER_ITEMS: NavItem[] = [

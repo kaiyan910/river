@@ -1,11 +1,15 @@
 import type { Permission } from '@river/auth';
+import type { ProcessDsl } from '@river/dsl';
 import {
   type AnyPgColumn,
   boolean,
+  integer,
+  jsonb,
   pgTable,
   primaryKey,
   text,
   timestamp,
+  unique,
   uuid,
 } from 'drizzle-orm/pg-core';
 
@@ -106,4 +110,35 @@ export const roleMembers = pgTable(
     addedAt: timestamp('added_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [primaryKey({ columns: [t.roleId, t.participantId] })],
+);
+
+// ─── 流程定義 ──────────────────────────────────────────────────────────────
+
+/** Process 與它唯一的一份草稿；draft 為 null 代表目前版本之後沒有改動。 */
+export const processes = pgTable('processes', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  name: text('name').notNull().unique(),
+  draft: jsonb('draft').$type<ProcessDsl>(),
+  draftSavedAt: timestamp('draft_saved_at', { withTimezone: true }),
+  draftSavedBy: uuid('draft_saved_by').references(() => participants.id),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
+/** 已發佈的 Process Version：只新增、不修改。版本號最大的是目前版本。 */
+export const processVersions = pgTable(
+  'process_versions',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    processId: uuid('process_id')
+      .notNull()
+      .references(() => processes.id),
+    version: integer('version').notNull(),
+    dsl: jsonb('dsl').$type<ProcessDsl>().notNull(),
+    note: text('note').notNull().default(''),
+    publishedBy: uuid('published_by')
+      .notNull()
+      .references(() => participants.id),
+    publishedAt: timestamp('published_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [unique().on(t.processId, t.version)],
 );

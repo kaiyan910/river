@@ -5,6 +5,8 @@ export class ApiError extends Error {
   constructor(
     readonly status: number,
     message: string,
+    /** 解析後的錯誤回應內容；不是 JSON 時為 undefined。 */
+    readonly body?: unknown,
   ) {
     super(message);
   }
@@ -23,17 +25,16 @@ export async function api<T = void>(path: string, options: ApiOptions<T> = {}): 
     headers: options.body === undefined ? undefined : { 'content-type': 'application/json' },
     body: options.body === undefined ? undefined : JSON.stringify(options.body),
   });
-  if (!res.ok) throw new ApiError(res.status, await errorMessage(res));
+  if (!res.ok) {
+    const body = await res.json().catch(() => undefined);
+    throw new ApiError(res.status, errorMessage(res.status, body), body);
+  }
   if (!options.schema || res.status === 204) return undefined as T;
   return options.schema.parse(await res.json());
 }
 
-async function errorMessage(res: Response): Promise<string> {
-  try {
-    const body = (await res.json()) as { message?: unknown };
-    if (typeof body.message === 'string') return body.message;
-  } catch {
-    // 回應不是 JSON，使用下方的預設訊息。
-  }
-  return `操作失敗（${res.status}），請稍後再試。`;
+function errorMessage(status: number, body: unknown): string {
+  const message = (body as { message?: unknown } | undefined)?.message;
+  if (typeof message === 'string') return message;
+  return `操作失敗（${status}），請稍後再試。`;
 }

@@ -9,6 +9,7 @@ import { ZodValidationPipe } from 'nestjs-zod';
 import type { Auth } from './auth/create-auth.js';
 import { HealthController } from './health/health.controller.js';
 import { OrgModule } from './org/org.module.js';
+import { ProcessModule } from './process/process.module.js';
 import {
   APP_URL,
   AUTH,
@@ -59,6 +60,7 @@ export class AppModule {
         LoggerModule.forRoot({ pinoHttp: { level: deps.logLevel } }),
         AuthModule.forRoot({ auth: deps.auth }),
         OrgModule,
+        ProcessModule,
       ],
       controllers: [HealthController],
       providers: [{ provide: APP_PIPE, useClass: ZodValidationPipe }],

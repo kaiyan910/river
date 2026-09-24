@@ -12,6 +12,8 @@ import {
 import { ApiCreatedResponse, ApiOkResponse } from '@nestjs/swagger';
 import {
   createParticipantSchema,
+  type DirectoryEntry,
+  directorySchema,
   participantListSchema,
   participantSchema,
   setPermissionsSchema,
@@ -24,6 +26,7 @@ import { ParticipantsService } from './participants.service.js';
 
 class ParticipantDto extends createZodDto(participantSchema) {}
 class ParticipantListDto extends createZodDto(participantListSchema) {}
+class DirectoryDto extends createZodDto(directorySchema) {}
 class CreateParticipantDto extends createZodDto(createParticipantSchema) {}
 class UpdateParticipantDto extends createZodDto(updateParticipantSchema) {}
 class SetPermissionsDto extends createZodDto(setPermissionsSchema) {}
@@ -40,6 +43,14 @@ export class ParticipantsController {
   @ApiOkResponse({ type: ParticipantListDto })
   list(): Promise<ParticipantDto[]> {
     return this.participants.list();
+  }
+
+  /** 挑選人員用的精簡清單；Designer 指派審批人時需要。 */
+  @Get('directory')
+  @RequirePermission('process.edit', 'process.publish', 'user.manage', 'role.manage')
+  @ApiOkResponse({ type: DirectoryDto })
+  directory(): Promise<DirectoryEntry[]> {
+    return this.participants.directory();
   }
 
   @Post()

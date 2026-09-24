@@ -1,6 +1,7 @@
 import type { Permission } from '@river/auth';
 import {
   type CreateParticipantInput,
+  directorySchema,
   invitationSchema,
   type Participant,
   participantListSchema,
@@ -15,6 +16,13 @@ import { meQueryOptions } from '@/lib/me';
 export const participantsQueryOptions = queryOptions({
   queryKey: ['participants'],
   queryFn: () => api('/participants', { schema: participantListSchema }),
+});
+
+/** 挑選人員用的精簡名錄（例如 Designer 指派審批人）。 */
+export const directoryQueryOptions = queryOptions({
+  queryKey: ['participants', 'directory'],
+  queryFn: () => api('/participants/directory', { schema: directorySchema }),
+  staleTime: 60_000,
 });
 
 export const rolesQueryOptions = queryOptions({

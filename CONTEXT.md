@@ -44,6 +44,10 @@ _Avoid_: Workflow, flow, template
 Process 的一個已發佈、不可再修改的快照，包含流程圖以及它用到的所有 Form；每筆 Request 在發起時就鎖定一個 Process Version，並依它跑到結束。
 _Avoid_: Revision, draft
 
+**Draft**（草稿）:
+Process 上唯一一份還沒發佈、可以繼續修改的流程圖；發佈時通過檢查才會變成新的 Process Version，發佈後草稿清空。
+_Avoid_: 用「draft」稱呼已發佈的 Process Version
+
 **Form**:
 由 Designer 以拖拉方式設計、在人工步驟中呈現給 Participant 填寫的表單定義；屬於某個 Process，不跨 Process 共用。
 _Avoid_: Page, screen

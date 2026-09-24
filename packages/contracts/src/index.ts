@@ -1,4 +1,5 @@
 import { PERMISSIONS } from '@river/auth';
+import { DSL_ERROR_CODES, processDslSchema } from '@river/dsl';
 import { z } from 'zod';
 
 /** `GET /api/me`：目前登入的 Participant。 */
@@ -85,3 +86,82 @@ export const roleListSchema = z.array(roleSchema);
 /** `POST /api/roles`、`PATCH /api/roles/:id` */
 export const roleNameSchema = z.object({ name: z.string().trim().min(1).max(100) });
 export type RoleNameInput = z.infer<typeof roleNameSchema>;
+
+/** `GET /api/participants/directory`：挑選人員用的精簡清單（例如 Designer 指派審批人），不含 Permission 與 Role。 */
+export const directoryEntrySchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  email: z.email(),
+  status: participantStatusSchema,
+});
+export type DirectoryEntry = z.infer<typeof directoryEntrySchema>;
+export const directorySchema = z.array(directoryEntrySchema);
+
+// ─── Process ─────────────────────────────────────────────────────────────
+
+const actorSchema = z.object({ id: z.string(), name: z.string() });
+
+export const dslErrorSchema = z.object({
+  nodeId: z.string().nullable(),
+  code: z.enum(DSL_ERROR_CODES),
+  message: z.string(),
+});
+
+/** 已發佈、不可修改的 Process Version。version 從 1 開始遞增。 */
+export const processVersionSchema = z.object({
+  version: z.number().int().positive(),
+  note: z.string(),
+  publishedAt: z.iso.datetime(),
+  publishedBy: actorSchema,
+  dsl: processDslSchema,
+});
+export type ProcessVersion = z.infer<typeof processVersionSchema>;
+
+export const processDraftSchema = z.object({
+  dsl: processDslSchema,
+  savedAt: z.iso.datetime(),
+  savedBy: actorSchema,
+});
+export type ProcessDraft = z.infer<typeof processDraftSchema>;
+
+/** `GET /api/processes/:id`。draft 為 null 代表目前版本之後沒有改動。 */
+export const processSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  draft: processDraftSchema.nullable(),
+  /** 目前版本（最新發佈的版本）；還沒發佈過時為 null。 */
+  currentVersion: z.number().int().positive().nullable(),
+  /** 依版本號由小到大。 */
+  versions: z.array(processVersionSchema),
+});
+export type Process = z.infer<typeof processSchema>;
+
+export const processSummarySchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  currentVersion: z.number().int().positive().nullable(),
+  draftSavedAt: z.iso.datetime().nullable(),
+});
+export type ProcessSummary = z.infer<typeof processSummarySchema>;
+
+/** `GET /api/processes` */
+export const processListSchema = z.array(processSummarySchema);
+
+/** `POST /api/processes`（建立只有開始與結束的草稿）、`PATCH /api/processes/:id` */
+export const processNameSchema = z.object({ name: z.string().trim().min(1).max(100) });
+export type ProcessNameInput = z.infer<typeof processNameSchema>;
+
+/** `PUT /api/processes/:id/draft`：以整份 DSL 取代草稿。只驗證格式，發佈前檢查的錯誤不會擋下儲存。 */
+export const saveDraftSchema = z.object({ dsl: processDslSchema });
+export type SaveDraftInput = z.infer<typeof saveDraftSchema>;
+
+/** `POST /api/processes/:id/versions`：把已儲存的草稿發佈成新的 Process Version。 */
+export const publishProcessSchema = z.object({ note: z.string().trim().max(200).default('') });
+export type PublishProcessInput = z.input<typeof publishProcessSchema>;
+
+/** 草稿沒有通過發佈前檢查時，發佈回 422 與這個內容；errors 與前端即時檢查的結果相同。 */
+export const publishRejectedSchema = z.object({
+  message: z.string(),
+  errors: z.array(dslErrorSchema),
+});
+export type PublishRejected = z.infer<typeof publishRejectedSchema>;

@@ -9,6 +9,7 @@ import {
 import { PERMISSIONS } from '@river/auth';
 import type {
   CreateParticipantCommand,
+  DirectoryEntry,
   Participant,
   ParticipantStatus,
   SetPermissionsInput,
@@ -50,6 +51,12 @@ export class ParticipantsService {
 
   list(): Promise<Participant[]> {
     return this.query();
+  }
+
+  /** 挑選人員用的精簡清單，不含 Permission 與 Role。 */
+  async directory(): Promise<DirectoryEntry[]> {
+    const people = await this.query();
+    return people.map(({ id, name, email, status }) => ({ id, name, email, status }));
   }
 
   async get(id: string): Promise<Participant> {
