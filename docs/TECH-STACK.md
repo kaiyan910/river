@@ -116,9 +116,9 @@ Worker 是一般的 Node.js 程式，不使用 NestJS。Temporal 的 workflow sa
 
 ## 資料（Postgres）
 
-- **兩個 database**：`river`（應用程式）與 `temporal`（Temporal 的持久層與 visibility）。兩者可以放在同一個 Postgres instance，但不能共用 database。
+- **應用程式與 Temporal 分開**：`river`（應用程式）與 `temporal`、`temporal_visibility`（Temporal 的持久層與 visibility；兩者的 `schema_version` 資料表會衝突，所以各用一個 database）。可以放在同一個 Postgres instance，但 `river` 不能與 Temporal 共用 database。
 - **Drizzle ORM + Drizzle Kit** 負責 schema 與 migrations。
-- **主要資料表**：participants、roles、role_members、permissions_grants、service_accounts、processes、process_versions（DSL 與 Form 的 JSONB 快照，不可修改）、requests、request_data（表單資料）、tasks、request_events（稽核歷程，只能新增）、credentials（加密儲存）、attachments（S3 object 的中繼資料）。
+- **主要資料表**：participants、roles、role_members、permission_grants、service_accounts、processes、process_versions（DSL 與 Form 的 JSONB 快照，不可修改）、requests、request_data（表單資料）、tasks、request_events（稽核歷程，只能新增）、credentials（加密儲存）、attachments（S3 object 的中繼資料）。
 - **稽核**：所有狀態變化都會寫入 `request_events`，Request 歷程時間軸直接讀這張表，不查詢 Temporal。
 - **Participant 只停用不刪除**，所以外鍵不會斷掉，歷程也永遠可以追溯。
 
@@ -147,7 +147,7 @@ Worker 是一般的 Node.js 程式，不使用 NestJS。Temporal 的 workflow sa
 | `worker` | Temporal worker，可以開多個副本 |
 | `temporal` | Temporal server（auto-setup 映像檔，持久層用 Postgres） |
 | `temporal-ui` | 只開放給內網或 VPN |
-| `postgres` | `river` 與 `temporal` 兩個 database |
+| `postgres` | `river`、`temporal`、`temporal_visibility` 三個 database |
 | `garage` | S3 相容的 object storage |
 
 維運時要注意：

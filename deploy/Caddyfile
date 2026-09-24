@@ -1,0 +1,13 @@
+# web 與 /api 放在同一個網域：session cookie 不需要跨網域，也沒有 CORS。
+# 正式環境把 SITE_ADDRESS 設成網域名稱，Caddy 會自動申請 TLS 憑證。
+{$SITE_ADDRESS} {
+	encode zstd gzip
+
+	handle /api/* {
+		reverse_proxy {$API_UPSTREAM}
+	}
+
+	handle {
+		reverse_proxy {$WEB_UPSTREAM}
+	}
+}

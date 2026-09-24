@@ -26,3 +26,11 @@
 - 定案 token 已匯出到 `.scratch/river-mvp/design-tokens.css`（`:root` + `.dark`），建立 `apps/web` 時直接放進 `globals.css`。
 - 附帶決定：新增 `--brand` / `--brand-foreground` token 給登入頁品牌色塊用，不再借用 `--sidebar-primary`。
 - Token 命名沿用 shadcn/ui 的 CSS 變數，另加 `--status-open|approved|returned|closed|overdue`、`--font-heading`、`--font-mono`、`--text-base`、`--row-h`。定案後用原型 Tokens 面板的「複製 CSS」匯出到 `apps/web` 的 `globals.css`。
+
+**2026-09-24 · 實作：NestJS v12 相容性（spec 待決問題 #5）與其他決定**
+
+- `@thallesp/nestjs-better-auth` 2.8.0：peer 宣告支援 `@nestjs/common`/`core` `^12.0.0`，可直接使用。
+- `nestjs-zod` 5.5.0（目前最新）：peer 只宣告 `@nestjs/common ^10 || ^11` 與 `@nestjs/swagger ^7.4.2 || ^8 || ^11`，還沒宣告 v12。在 NestJS 12.1 + `@nestjs/swagger` 12.0.2 上實測 `ZodValidationPipe`（400 / 201）、`createZodDto` 與 `cleanupOpenApiDoc` 產生的 OpenAPI schema 都正常，所以照常使用，bun 只會顯示 peer 警告。上游發佈 v12 支援後要升級。
+- Temporal 用 `temporal` 與 `temporal_visibility` 兩個 database（auto-setup 兩份 schema 的 `schema_version` 資料表會衝突），都與 `river` 分開；已更新 TECH-STACK.md。
+- worker 的 dev 用 `tsx watch`：`node --watch` 在 Temporal 的 workflow worker thread 裡會 crash（`RangeError: Invalid atomic access index`）。api 用 `node --watch` + `@swc-node/register`，因為 Nest 需要 decorator metadata。
+- TypeScript 固定在 6.0（`@nestjs/swagger` 12 與 nestjs-better-auth 的 peer 還不支援 7）。Lint 用 Biome。
