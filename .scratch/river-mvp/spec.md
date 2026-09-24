@@ -270,5 +270,5 @@ River 是一個公司內部的 low-code 審批平台：
 2. **HTTP 回應寫回 Request 資料**：MVP 建議不做；HTTP 節點只看成功或失敗。
 3. **排程發起的發起人**：建議排程設定時必須指定一位 Participant 作為發起人。
 4. ~~**永久拒絕**~~：**已決定（2026-09-24）**：不需要。審批結果只有核准和 Return；發起人被 Return 後可以自行 Withdraw。
-5. **NestJS v12 相容性**：開始建立骨架時，先確認 `nestjs-zod` 與 Better Auth 的 NestJS 整合已支援 v12。
+5. ~~**NestJS v12 相容性**~~：**已確認（2026-09-24）**：Better Auth 的 NestJS 整合正式支援 v12；`nestjs-zod` 5.5.0 還沒宣告支援，但在 v12 上實測正常，照常使用。詳見 issue 01 的 Comments。
 6. **Resend 的資料外流**：使用 Resend 代表 email 會經過外部服務，而且 VM 必須能連到外網。上線前要確認公司政策是否允許。
