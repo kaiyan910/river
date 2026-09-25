@@ -27,6 +27,9 @@ import { HomePage } from '@/routes/home';
 import { InvitePage } from '@/routes/invite';
 import { LoginPage } from '@/routes/login';
 import { PlaceholderPage } from '@/routes/placeholder';
+import { RequestsPage } from '@/routes/portal/requests';
+import { StartPage } from '@/routes/portal/start';
+import { TasksPage } from '@/routes/portal/tasks';
 
 const rootRoute = createRootRouteWithContext<{ queryClient: QueryClient }>()({
   component: () => (
@@ -151,6 +154,39 @@ const processesRoute = createRoute({
   },
 });
 
+const startRoute = createRoute({
+  getParentRoute: () => authenticatedRoute,
+  path: '/start',
+  validateSearch: selectionSearch,
+  component: function Start() {
+    const { id } = startRoute.useSearch();
+    const navigate = startRoute.useNavigate();
+    return <StartPage selected={id} onSelect={(next) => navigate({ search: { id: next } })} />;
+  },
+});
+
+const tasksRoute = createRoute({
+  getParentRoute: () => authenticatedRoute,
+  path: '/tasks',
+  validateSearch: selectionSearch,
+  component: function Tasks() {
+    const { id } = tasksRoute.useSearch();
+    const navigate = tasksRoute.useNavigate();
+    return <TasksPage selected={id} onSelect={(next) => navigate({ search: { id: next } })} />;
+  },
+});
+
+const requestsRoute = createRoute({
+  getParentRoute: () => authenticatedRoute,
+  path: '/requests',
+  validateSearch: selectionSearch,
+  component: function Requests() {
+    const { id } = requestsRoute.useSearch();
+    const navigate = requestsRoute.useNavigate();
+    return <RequestsPage selected={id} onSelect={(next) => navigate({ search: { id: next } })} />;
+  },
+});
+
 const placeholderRoutes = PLACEHOLDER_ITEMS.map((item) =>
   createRoute({
     getParentRoute: () => authenticatedRoute,
@@ -171,6 +207,9 @@ const routeTree = rootRoute.addChildren([
     participantsRoute,
     rolesRoute,
     processesRoute,
+    startRoute,
+    tasksRoute,
+    requestsRoute,
     ...placeholderRoutes,
   ]),
 ]);

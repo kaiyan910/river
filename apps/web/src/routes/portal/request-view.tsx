@@ -1,0 +1,330 @@
+import type { RequestDetail, RequestEvent, RequestSummary } from '@river/contracts';
+import { Check, CheckCircle2, Circle, Loader2, Search } from 'lucide-react';
+import type { ReactNode } from 'react';
+import { Avatar } from '@/components/people';
+import { Input } from '@/components/ui/input';
+import { isAdvancing, requestNumber } from '@/lib/requests';
+import { formatTime } from '@/lib/time';
+import { cn } from '@/lib/utils';
+
+/** 入口網站三頁（發起、我的待辦、我的申請）共用的畫面元件；版面是 A「清單 + 詳情」。 */
+
+export function ListColumn({ children }: { children: ReactNode }) {
+  return (
+    <section className="flex min-h-0 flex-col border-border bg-card md:border-r">
+      {children}
+    </section>
+  );
+}
+
+export function ListSearch({
+  value,
+  onChange,
+  placeholder,
+}: {
+  value: string;
+  onChange: (value: string) => void;
+  placeholder: string;
+}) {
+  return (
+    <div className="relative mx-3 mb-2.5">
+      <Search
+        size={15}
+        aria-hidden
+        className="-translate-y-1/2 absolute top-1/2 left-[0.7em] text-muted-foreground"
+      />
+      <Input
+        type="search"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        aria-label={placeholder}
+        placeholder={placeholder}
+        className="h-[2.3em] border-transparent bg-muted pl-[2.2em]"
+      />
+    </div>
+  );
+}
+
+export function SegmentTabs<T extends string>({
+  label,
+  value,
+  options,
+  onChange,
+}: {
+  label: string;
+  value: T;
+  options: { key: T; label: string; count?: number }[];
+  onChange: (value: T) => void;
+}) {
+  return (
+    <div role="tablist" aria-label={label} className="inline-flex rounded-lg bg-muted p-0.5">
+      {options.map((o) => (
+        <button
+          key={o.key}
+          type="button"
+          role="tab"
+          aria-selected={value === o.key}
+          onClick={() => onChange(o.key)}
+          className={cn(
+            'cursor-pointer rounded-md px-[0.7em] py-[0.3em] text-[0.93em] text-muted-foreground',
+            value === o.key &&
+              'bg-card text-foreground shadow-[0_1px_2px_color-mix(in_oklch,var(--foreground)_14%,transparent)]',
+          )}
+        >
+          {o.label}
+          {o.count !== undefined && (
+            <span className="ml-[0.35em] font-mono text-[0.85em] opacity-70">{o.count}</span>
+          )}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+export function ListMessage({ children, error }: { children: ReactNode; error?: boolean }) {
+  return (
+    <li
+      className={cn('px-3 py-8 text-center', error ? 'text-destructive' : 'text-muted-foreground')}
+    >
+      {children}
+    </li>
+  );
+}
+
+export function EmptyDetail({
+  icon: Icon,
+  title,
+  text,
+}: {
+  icon: typeof Search;
+  title: string;
+  text: string;
+}) {
+  return (
+    <div className="grid min-h-[50vh] place-items-center content-center gap-2.5 px-4 py-16 text-center">
+      <div className="grid size-14 place-items-center rounded-[calc(var(--radius)+6px)] bg-muted text-muted-foreground">
+        <Icon size={26} aria-hidden />
+      </div>
+      <h2 className="font-semibold text-[1.3em]">{title}</h2>
+      <p className="max-w-[36em] text-muted-foreground">{text}</p>
+    </div>
+  );
+}
+
+export function Card({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <section className="grid gap-3 rounded-xl border bg-card p-4">
+      <h2 className="font-semibold text-[0.95em] text-muted-foreground">{title}</h2>
+      {children}
+    </section>
+  );
+}
+
+/** 進行中：目前步驟與處理人；workflow 往下一步走的空檔顯示「處理中」。 */
+export function RequestStatus({
+  request,
+  withStep,
+}: {
+  request: Pick<RequestSummary, 'status' | 'openTasks'>;
+  withStep?: boolean;
+}) {
+  if (request.status === 'completed')
+    return (
+      <span className="inline-flex items-center gap-1.5 whitespace-nowrap text-[0.86em] text-muted-foreground">
+        <span className="size-[7px] rounded-full bg-status-approved" />
+        已完成
+      </span>
+    );
+  const step = request.openTasks[0];
+  return (
+    <span className="inline-flex min-w-0 items-center gap-1.5 text-[0.86em] text-muted-foreground">
+      {isAdvancing(request) ? (
+        <Loader2 size={11} aria-hidden className="shrink-0 animate-spin text-status-open" />
+      ) : (
+        <span className="size-[7px] shrink-0 rounded-full bg-status-open" />
+      )}
+      <span className="truncate">
+        {!withStep
+          ? '進行中'
+          : step
+            ? `${step.nodeName} · 等待 ${request.openTasks.map((t) => t.assignee.name).join('、')}`
+            : '處理中'}
+      </span>
+    </span>
+  );
+}
+
+export function RequestHeader({ request }: { request: RequestDetail }) {
+  return (
+    <header className="grid gap-1.5">
+      <div className="flex flex-wrap items-center gap-2 text-[0.86em] text-muted-foreground">
+        <span className="font-mono">{requestNumber(request.number)}</span>
+        <span aria-hidden>·</span>
+        <span>
+          {request.process.name} <span className="font-mono">v{request.process.version}</span>
+        </span>
+      </div>
+      <h1 className="font-semibold text-[1.45em]">{request.title}</h1>
+      <div className="flex flex-wrap items-center gap-3 text-[0.9em] text-muted-foreground">
+        <span className="inline-flex items-center gap-1.5">
+          <Avatar id={request.initiator.id} name={request.initiator.name} size={20} />
+          {request.initiator.name} 發起於 {formatTime(request.createdAt)}
+        </span>
+        <RequestStatus request={request} withStep />
+      </div>
+    </header>
+  );
+}
+
+export function RequestContent({ request }: { request: RequestDetail }) {
+  return (
+    <Card title="申請內容">
+      <dl className="grid grid-cols-[6em_1fr] gap-y-1.5 text-[0.95em]">
+        <dt className="text-muted-foreground">標題</dt>
+        <dd>{request.title}</dd>
+      </dl>
+    </Card>
+  );
+}
+
+type StepState = 'done' | 'current' | 'advancing' | 'todo';
+
+/** 每一步的狀態：已完成、目前（有 open Task）、處理中（workflow 正在走到這一步）、還沒到。 */
+function stepStates(request: RequestDetail): StepState[] {
+  let previousDone = true;
+  return request.steps.map((step) => {
+    let state: StepState;
+    if (step.type === 'start') state = 'done';
+    else if (step.type === 'end') state = request.status === 'completed' ? 'done' : 'todo';
+    else {
+      const task = request.tasks.findLast((t) => t.nodeId === step.nodeId);
+      state = task?.status === 'open' ? 'current' : task ? 'done' : 'todo';
+    }
+    if (state === 'todo' && previousDone && isAdvancing(request)) state = 'advancing';
+    previousDone = state === 'done';
+    return state;
+  });
+}
+
+const STEP_TONE: Record<StepState, string> = {
+  done: 'border-status-approved bg-status-approved text-white',
+  current: 'border-status-open bg-status-open text-white',
+  advancing: 'border-status-open bg-card text-status-open',
+  todo: 'border-border bg-card text-muted-foreground',
+};
+
+function StepIcon({ state }: { state: StepState }) {
+  if (state === 'done') return <Check size={13} strokeWidth={2.5} />;
+  if (state === 'advancing') return <Loader2 size={13} className="animate-spin" />;
+  return <Circle size={8} fill={state === 'current' ? 'currentColor' : 'none'} />;
+}
+
+export function Progress({ request }: { request: RequestDetail }) {
+  const states = stepStates(request);
+  return (
+    <ol className="flex items-start">
+      {request.steps.map((step, i) => {
+        const state = states[i] ?? 'todo';
+        return (
+          <li key={step.nodeId} className="flex flex-1 items-start last:flex-none">
+            <div className="grid justify-items-center gap-1 text-center">
+              <span
+                aria-hidden
+                className={cn(
+                  'grid size-7 place-items-center rounded-full border-2',
+                  STEP_TONE[state],
+                )}
+              >
+                <StepIcon state={state} />
+              </span>
+              <span className="font-medium text-[0.88em]">{step.name}</span>
+              <span className="text-[0.8em] text-muted-foreground">
+                {step.type === 'start'
+                  ? request.initiator.name
+                  : step.type === 'end'
+                    ? state === 'done'
+                      ? '已完成'
+                      : ''
+                    : step.assignee?.name}
+              </span>
+            </div>
+            {i < request.steps.length - 1 && (
+              <div
+                className={cn(
+                  'mx-2 mt-3.5 h-0.5 flex-1 rounded',
+                  state === 'done' ? 'bg-status-approved' : 'bg-border',
+                )}
+              />
+            )}
+          </li>
+        );
+      })}
+    </ol>
+  );
+}
+
+function describeEvent(e: RequestEvent): string {
+  switch (e.type) {
+    case 'request.started':
+      return `${e.actor?.name} 發起申請`;
+    case 'task.created':
+      return `流轉到「${e.task?.nodeName}」，等待 ${e.task?.assignee.name} 處理`;
+    case 'task.completed':
+      return `${e.actor?.name} 在「${e.task?.nodeName}」核准`;
+    case 'request.completed':
+      return '申請完成';
+  }
+}
+
+/** 時間軸：逐列顯示 request_events。 */
+export function Timeline({ request }: { request: RequestDetail }) {
+  return (
+    <ol className="relative grid gap-4 before:absolute before:top-2 before:bottom-2 before:left-[13px] before:w-px before:bg-border">
+      {request.events.map((e) => (
+        <li key={e.id} className="relative flex gap-3">
+          <span className="z-[1] mt-0.5">
+            {e.actor ? (
+              <Avatar id={e.actor.id} name={e.actor.name} size={27} />
+            ) : (
+              <span
+                className={cn(
+                  'grid size-[27px] place-items-center rounded-full border bg-card text-muted-foreground',
+                  e.type === 'request.completed' && 'border-status-approved text-status-approved',
+                )}
+              >
+                {e.type === 'request.completed' ? (
+                  <CheckCircle2 size={14} aria-hidden />
+                ) : (
+                  <span className="size-1.5 rounded-full bg-current" />
+                )}
+              </span>
+            )}
+          </span>
+          <div className="min-w-0 flex-1">
+            <div className="flex flex-wrap items-baseline justify-between gap-x-3">
+              <span className={cn(e.actor ? 'font-medium' : 'text-muted-foreground')}>
+                {describeEvent(e)}
+              </span>
+              <time dateTime={e.at} className="font-mono text-[0.8em] text-muted-foreground">
+                {formatTime(e.at)}
+              </time>
+            </div>
+            {e.comment && (
+              <p className="mt-1.5 whitespace-pre-wrap rounded-lg bg-muted px-3 py-2 text-[0.93em]">
+                {e.comment}
+              </p>
+            )}
+          </div>
+        </li>
+      ))}
+      {isAdvancing(request) && (
+        <li className="relative flex gap-3 text-muted-foreground">
+          <span className="z-[1] grid size-[27px] place-items-center rounded-full border bg-card">
+            <Loader2 size={13} aria-hidden className="animate-spin" />
+          </span>
+          <span className="mt-1">處理中，下一步馬上出現…</span>
+        </li>
+      )}
+    </ol>
+  );
+}

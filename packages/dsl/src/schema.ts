@@ -70,3 +70,20 @@ export function initialProcessDsl(): ProcessDsl {
     edges: [],
   };
 }
+
+/**
+ * 從「開始」沿著連線走到「結束」的節點順序；每個節點取第一條出邊。
+ * 目前的節點類型只能組成一直線，之後有條件與並行分支時要改寫。
+ */
+export function mainPath(dsl: ProcessDsl): ProcessNode[] {
+  const byId = new Map(dsl.nodes.map((n) => [n.id, n]));
+  const path: ProcessNode[] = [];
+  let node: ProcessNode | undefined = dsl.nodes.find((n) => n.type === 'start');
+  while (node && !path.includes(node)) {
+    path.push(node);
+    const id: string = node.id;
+    const edge = dsl.edges.find((e) => e.source === id);
+    node = edge && byId.get(edge.target);
+  }
+  return path;
+}

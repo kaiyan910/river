@@ -37,6 +37,11 @@ export function RequirePermission(...permissions: [Permission, ...Permission[]])
   );
 }
 
+/** 任何有效（未停用）的 Participant 都能呼叫；handler 可以用 `@CurrentParticipant()` 取得呼叫者。 */
+export function RequireParticipant() {
+  return applyDecorators(SetMetadata(REQUIRED_PERMISSIONS, []), UseGuards(PermissionGuard));
+}
+
 @Injectable()
 export class PermissionGuard implements CanActivate {
   constructor(
@@ -55,7 +60,7 @@ export class PermissionGuard implements CanActivate {
 
     const participant = await findActiveParticipant(this.db, userId);
     if (!participant) throw new ForbiddenException('這個帳號不是有效的 Participant');
-    if (required && !required.some((p) => participant.permissions.includes(p))) {
+    if (required?.length && !required.some((p) => participant.permissions.includes(p))) {
       throw new ForbiddenException(`需要 Permission：${required.join(' 或 ')}`);
     }
     request.participant = participant;
@@ -63,11 +68,12 @@ export class PermissionGuard implements CanActivate {
   }
 }
 
-/** 目前呼叫者的 Participant；只能用在掛了 `@RequirePermission` 的 handler。 */
+/** 目前呼叫者的 Participant；只能用在掛了 `@RequirePermission` 或 `@RequireParticipant` 的 handler。 */
 export const CurrentParticipant = createParamDecorator(
   (_: unknown, context: ExecutionContext): ActiveParticipant => {
     const participant = context.switchToHttp().getRequest<GuardedRequest>().participant;
-    if (!participant) throw new Error('CurrentParticipant 必須搭配 @RequirePermission 使用');
+    if (!participant)
+      throw new Error('CurrentParticipant 必須搭配 @RequirePermission 或 @RequireParticipant 使用');
     return participant;
   },
 );

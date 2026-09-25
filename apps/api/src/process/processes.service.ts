@@ -5,10 +5,17 @@ import {
   NotFoundException,
   UnprocessableEntityException,
 } from '@nestjs/common';
-import type { Process, ProcessSummary, ProcessVersion, PublishRejected } from '@river/contracts';
+import type {
+  Process,
+  ProcessStep,
+  ProcessSummary,
+  ProcessVersion,
+  PublishRejected,
+  StartableProcess,
+} from '@river/contracts';
 import { authUsers, type Database, participants, processes, processVersions } from '@river/db';
-import { checkProcess, initialProcessDsl, type ProcessDsl } from '@river/dsl';
-import { asc, eq, max } from 'drizzle-orm';
+import { checkProcess, initialProcessDsl, mainPath, type ProcessDsl } from '@river/dsl';
+import { asc, desc, eq, inArray, max } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
 import type { ActiveParticipant } from '../auth/active-participant.js';
 import { DATABASE } from '../tokens.js';
@@ -40,6 +47,23 @@ export class ProcessesService {
       name: r.name,
       currentVersion: r.currentVersion,
       draftSavedAt: r.draftSavedAt?.toISOString() ?? null,
+    }));
+  }
+
+  /** 每個已發佈 Process 的目前版本與步驟預覽；還沒發佈過的 Process 不會出現。 */
+  async startable(): Promise<StartableProcess[]> {
+    const rows = await currentVersions(this.db);
+    const names = await participantNames(
+      this.db,
+      rows
+        .flatMap((r) => r.dsl.nodes)
+        .flatMap((n) => (n.type === 'approval' && n.assignee ? [n.assignee.participantId] : [])),
+    );
+    return rows.map((r) => ({
+      id: r.id,
+      name: r.name,
+      version: r.version,
+      steps: stepsOf(r.dsl, names),
     }));
   }
 
@@ -193,4 +217,48 @@ async function latestVersion(db: Pick<Database, 'select'>, processId: string): P
     .from(processVersions)
     .where(eq(processVersions.processId, processId));
   return row?.version ?? 0;
+}
+
+/** 每個 Process 的目前版本（版本號最大的 Process Version），依 Process 名稱排序；可以只查一個 Process。 */
+export async function currentVersions(db: Pick<Database, 'selectDistinctOn'>, processId?: string) {
+  const rows = await db
+    .selectDistinctOn([processVersions.processId], {
+      id: processes.id,
+      name: processes.name,
+      versionId: processVersions.id,
+      version: processVersions.version,
+      dsl: processVersions.dsl,
+    })
+    .from(processVersions)
+    .innerJoin(processes, eq(processes.id, processVersions.processId))
+    .where(processId ? eq(processVersions.processId, processId) : undefined)
+    .orderBy(processVersions.processId, desc(processVersions.version));
+  return rows.sort((a, b) => a.name.localeCompare(b.name));
+}
+
+/** Participant ID → 姓名。 */
+export async function participantNames(
+  db: Pick<Database, 'select'>,
+  ids: string[],
+): Promise<Map<string, string>> {
+  if (ids.length === 0) return new Map();
+  const rows = await db
+    .select({ id: participants.id, name: authUsers.name })
+    .from(participants)
+    .innerJoin(authUsers, eq(authUsers.id, participants.userId))
+    .where(inArray(participants.id, [...new Set(ids)]));
+  return new Map(rows.map((r) => [r.id, r.name]));
+}
+
+/** 流程預覽：沿著主線列出每個節點，審批節點帶審批人。 */
+export function stepsOf(dsl: ProcessDsl, names: Map<string, string>): ProcessStep[] {
+  return mainPath(dsl).map((node) => {
+    const assigneeId = node.type === 'approval' ? node.assignee?.participantId : undefined;
+    return {
+      nodeId: node.id,
+      type: node.type,
+      name: node.name,
+      assignee: assigneeId ? { id: assigneeId, name: names.get(assigneeId) ?? '' } : null,
+    };
+  });
 }

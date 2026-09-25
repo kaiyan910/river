@@ -2,7 +2,9 @@ import type { Permission } from '@river/auth';
 import type { ProcessDsl } from '@river/dsl';
 import {
   type AnyPgColumn,
+  bigint,
   boolean,
+  index,
   integer,
   jsonb,
   pgTable,
@@ -141,4 +143,86 @@ export const processVersions = pgTable(
     publishedAt: timestamp('published_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [unique().on(t.processId, t.version)],
+);
+
+// ─── Request 與 Task ──────────────────────────────────────────────────────
+
+export const REQUEST_STATUSES = ['running', 'completed'] as const;
+export type RequestStatus = (typeof REQUEST_STATUSES)[number];
+
+/** 一筆 Request 對應一個 Temporal workflow，workflow ID 等於 Request ID。發起時鎖定 Process Version。 */
+export const requests = pgTable(
+  'requests',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    /** 給人看的流水號，畫面顯示成 R-000042。 */
+    number: integer('number').generatedAlwaysAsIdentity().notNull().unique(),
+    processVersionId: uuid('process_version_id')
+      .notNull()
+      .references(() => processVersions.id),
+    initiatorId: uuid('initiator_id')
+      .notNull()
+      .references(() => participants.id),
+    title: text('title').notNull(),
+    status: text('status').$type<RequestStatus>().notNull().default('running'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index().on(t.initiatorId)],
+);
+
+export const TASK_STATUSES = ['open', 'completed'] as const;
+export type TaskStatus = (typeof TASK_STATUSES)[number];
+export type TaskOutcome = 'approved';
+
+/**
+ * Request 流轉到人工步驟時由 workflow 建立。ID 由 workflow 產生，activity 重試時不會重複建立。
+ * API 以樂觀鎖（status + version）把 open 改成 completed，只有成功的一方送出 taskCompleted Signal。
+ */
+export const tasks = pgTable(
+  'tasks',
+  {
+    id: uuid('id').primaryKey(),
+    requestId: uuid('request_id')
+      .notNull()
+      .references(() => requests.id),
+    nodeId: text('node_id').notNull(),
+    nodeName: text('node_name').notNull(),
+    assigneeId: uuid('assignee_id')
+      .notNull()
+      .references(() => participants.id),
+    status: text('status').$type<TaskStatus>().notNull().default('open'),
+    outcome: text('outcome').$type<TaskOutcome>(),
+    comment: text('comment'),
+    completedBy: uuid('completed_by').references(() => participants.id),
+    completedAt: timestamp('completed_at', { withTimezone: true }),
+    version: integer('version').notNull().default(1),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index().on(t.requestId), index().on(t.assigneeId, t.status)],
+);
+
+export const REQUEST_EVENT_TYPES = [
+  'request.started',
+  'task.created',
+  'task.completed',
+  'request.completed',
+] as const;
+export type RequestEventType = (typeof REQUEST_EVENT_TYPES)[number];
+
+/** 稽核歷程：只能新增（資料庫 trigger 擋下 UPDATE 與 DELETE）。時間軸與「我的申請」直接讀這張表。 */
+export const requestEvents = pgTable(
+  'request_events',
+  {
+    id: bigint('id', { mode: 'number' }).generatedAlwaysAsIdentity().primaryKey(),
+    requestId: uuid('request_id')
+      .notNull()
+      .references(() => requests.id),
+    type: text('type').$type<RequestEventType>().notNull(),
+    /** 做這件事的人；系統事件（流轉、完成）為 null。 */
+    actorId: uuid('actor_id').references(() => participants.id),
+    taskId: uuid('task_id').references(() => tasks.id),
+    comment: text('comment'),
+    at: timestamp('at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index().on(t.requestId, t.id)],
 );

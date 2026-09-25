@@ -34,6 +34,8 @@ export const PROCESSES: NavItem = {
   icon: Workflow,
   requires: 'process.edit',
 };
+export const MY_TASKS: NavItem = { to: '/tasks', label: '我的待辦', icon: Inbox };
+export const MY_REQUESTS: NavItem = { to: '/requests', label: '我的申請', icon: FileText };
 export const ROLES: NavItem = {
   to: '/admin/roles',
   label: 'Role',
@@ -43,11 +45,7 @@ export const ROLES: NavItem = {
 
 /** icon rail 的分組；組與組之間以分隔線隔開。 */
 export const NAV_GROUPS: NavItem[][] = [
-  [
-    HOME,
-    { to: '/tasks', label: '我的待辦', icon: Inbox },
-    { to: '/requests', label: '我的申請', icon: FileText },
-  ],
+  [HOME, START_REQUEST, MY_TASKS, MY_REQUESTS],
   [PROCESSES],
   [
     PARTICIPANTS,
@@ -67,10 +65,17 @@ export function canAccess(item: NavItem, permissions: readonly Permission[]): bo
   return !item.requires || permissions.includes(item.requires);
 }
 
-const IMPLEMENTED: NavItem[] = [HOME, PARTICIPANTS, ROLES, PROCESSES];
+const IMPLEMENTED: NavItem[] = [
+  HOME,
+  START_REQUEST,
+  MY_TASKS,
+  MY_REQUESTS,
+  PARTICIPANTS,
+  ROLES,
+  PROCESSES,
+];
 
 /** 還沒有實作內容、先以佔位頁接好路由的導覽項目。 */
-export const PLACEHOLDER_ITEMS: NavItem[] = [
-  START_REQUEST,
-  ...NAV_GROUPS.flat().filter((i) => !IMPLEMENTED.includes(i)),
-];
+export const PLACEHOLDER_ITEMS: NavItem[] = NAV_GROUPS.flat().filter(
+  (i) => !IMPLEMENTED.includes(i),
+);

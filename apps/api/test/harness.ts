@@ -3,6 +3,7 @@ import type { INestApplication } from '@nestjs/common';
 import { connectDatabase, type Database, migrateDatabase } from '@river/db';
 import { RecordingEmailSender } from '@river/email';
 import { createWorker } from '@river/worker';
+import type { Client } from '@temporalio/client';
 import { TestWorkflowEnvironment } from '@temporalio/testing';
 import { DefaultLogger, makeTelemetryFilterString, Runtime } from '@temporalio/worker';
 import pg from 'pg';
@@ -69,6 +70,8 @@ export interface TestApp {
   anonymous: ApiClient;
   /** 取代 SMTP / Resend 的 fake，記錄 api 寄出的每一封信。 */
   emails: RecordingEmailSender;
+  /** 直接對 Temporal 送 Signal，模擬 API 重試或重複送出。 */
+  temporal: Client;
   provisionParticipant(input: ProvisionParticipantInput): Promise<{ participantId: string }>;
   /** 用 email + 密碼登入，回傳帶著 session cookie 的 client；失敗時丟出錯誤。 */
   signIn(email: string, password: string): Promise<ApiClient>;
@@ -117,6 +120,7 @@ export async function startTestApp(): Promise<TestApp> {
     db: database.db,
     anonymous,
     emails,
+    temporal: temporal.client,
     provisionParticipant: (input) => provisionParticipant(auth, database.db, input),
     async signIn(email, password) {
       const res = await anonymous.post('/api/auth/sign-in/email', { email, password });

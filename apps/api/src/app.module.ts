@@ -10,6 +10,7 @@ import type { Auth } from './auth/create-auth.js';
 import { HealthController } from './health/health.controller.js';
 import { OrgModule } from './org/org.module.js';
 import { ProcessModule } from './process/process.module.js';
+import { RequestModule } from './request/request.module.js';
 import {
   APP_URL,
   AUTH,
@@ -61,6 +62,7 @@ export class AppModule {
         AuthModule.forRoot({ auth: deps.auth }),
         OrgModule,
         ProcessModule,
+        RequestModule,
       ],
       controllers: [HealthController],
       providers: [{ provide: APP_PIPE, useClass: ZodValidationPipe }],

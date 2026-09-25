@@ -1,0 +1,210 @@
+import type { RequestTask, TaskStatus } from '@river/contracts';
+import { useQuery } from '@tanstack/react-query';
+import { CheckCircle2, Inbox } from 'lucide-react';
+import { useRef, useState } from 'react';
+import { Avatar } from '@/components/people';
+import { toast } from '@/components/toast';
+import { Button } from '@/components/ui/button';
+import {
+  myTasksQueryOptions,
+  requestNumber,
+  requestQueryOptions,
+  useApproveTask,
+} from '@/lib/requests';
+import { formatTime, timeAgo } from '@/lib/time';
+import { cn } from '@/lib/utils';
+import {
+  Card,
+  EmptyDetail,
+  ListColumn,
+  ListMessage,
+  ListSearch,
+  Progress,
+  RequestContent,
+  RequestHeader,
+  SegmentTabs,
+  Timeline,
+} from './request-view';
+
+/** 我的待辦：左欄指派給我的 Task，右欄 Request 內容、核准區與時間軸。 */
+export function TasksPage({
+  selected,
+  onSelect,
+}: {
+  selected: string | undefined;
+  onSelect: (id: string | undefined) => void;
+}) {
+  const [tab, setTab] = useState<TaskStatus>('open');
+  const [query, setQuery] = useState('');
+  const open = useQuery(myTasksQueryOptions('open'));
+  const done = useQuery(myTasksQueryOptions('completed'));
+  const current = tab === 'open' ? open : done;
+  const q = query.trim().toLowerCase();
+  const all = current.data ?? [];
+  const list = all.filter(
+    (t) =>
+      !q ||
+      t.request.title.toLowerCase().includes(q) ||
+      requestNumber(t.request.number).toLowerCase().includes(q),
+  );
+  // 選取的 Task 核准後會從「待處理」移到「已處理」；兩個清單重新讀取的空檔裡仍要保留明細，
+  // 所以記住看過的 Task 屬於哪一筆 Request。
+  const requestOfTask = useRef(new Map<string, string>());
+  for (const t of [...(open.data ?? []), ...(done.data ?? [])])
+    requestOfTask.current.set(t.id, t.request.id);
+  const requestId = selected ? requestOfTask.current.get(selected) : undefined;
+
+  return (
+    <>
+      <ListColumn>
+        <div className="p-3">
+          <SegmentTabs
+            label="Task 狀態"
+            value={tab}
+            onChange={setTab}
+            options={[
+              { key: 'open', label: '待處理', count: open.data?.length },
+              { key: 'completed', label: '已處理', count: done.data?.length },
+            ]}
+          />
+        </div>
+        <ListSearch value={query} onChange={setQuery} placeholder="搜尋編號、標題" />
+        <ul aria-label="我的待辦" className="flex-1 overflow-auto border-t">
+          {current.isPending && <ListMessage>載入中…</ListMessage>}
+          {current.isError && <ListMessage error>{current.error.message}</ListMessage>}
+          {current.isSuccess && list.length === 0 && (
+            <ListMessage>
+              {all.length
+                ? '沒有符合的 Task。'
+                : tab === 'open'
+                  ? '目前沒有待辦。'
+                  : '還沒有處理過任何 Task。'}
+            </ListMessage>
+          )}
+          {list.map((t) => (
+            <li key={t.id}>
+              <button
+                type="button"
+                aria-current={selected === t.id ? 'true' : undefined}
+                onClick={() => onSelect(t.id)}
+                className={cn(
+                  'flex w-full cursor-pointer gap-2.5 border-b px-3 py-2.5 text-left hover:bg-muted/60',
+                  selected === t.id && 'bg-accent hover:bg-accent',
+                )}
+              >
+                <Avatar id={t.request.initiator.id} name={t.request.initiator.name} size={30} />
+                <span className="grid min-w-0 flex-1 gap-0.5">
+                  <span className="flex items-baseline justify-between gap-2">
+                    <span className="truncate font-medium">{t.request.title}</span>
+                    <span className="shrink-0 text-[0.78em] text-muted-foreground">
+                      {timeAgo(t.completedAt ?? t.createdAt)}
+                    </span>
+                  </span>
+                  <span className="truncate text-[0.86em] text-muted-foreground">
+                    {t.request.initiator.name} · {t.request.process.name} · {t.nodeName}
+                  </span>
+                </span>
+              </button>
+            </li>
+          ))}
+        </ul>
+      </ListColumn>
+      <section className="min-w-0 overflow-auto">
+        {selected && requestId ? (
+          <TaskDetail key={selected} taskId={selected} requestId={requestId} />
+        ) : (
+          <EmptyDetail
+            icon={Inbox}
+            title="選擇一筆待辦"
+            text="Request 的內容、核准與歷程會顯示在這裡。"
+          />
+        )}
+      </section>
+    </>
+  );
+}
+
+function TaskDetail({ taskId, requestId }: { taskId: string; requestId: string }) {
+  const request = useQuery(requestQueryOptions(requestId));
+  // 放在這一層：已由別人處理時畫面會切成「已處理」，錯誤訊息仍然要留著。
+  const approve = useApproveTask();
+  if (request.isPending) return <p className="px-6 py-8 text-muted-foreground">載入中…</p>;
+  if (request.isError) return <p className="px-6 py-8 text-destructive">{request.error.message}</p>;
+  const r = request.data;
+  const task = r.tasks.find((t) => t.id === taskId);
+  if (!task) return null;
+
+  return (
+    <div className="mx-auto grid max-w-[760px] gap-5 px-6 py-8">
+      <RequestHeader request={r} />
+      <RequestContent request={r} />
+      {task.status === 'open' ? (
+        <ApprovePanel task={task} title={r.title} approve={approve} />
+      ) : (
+        <section className="flex items-start gap-2 rounded-xl border bg-muted/60 p-4">
+          <CheckCircle2 size={18} aria-hidden className="mt-0.5 shrink-0 text-status-approved" />
+          <span role={approve.isError ? 'alert' : undefined}>
+            {approve.isError && `${approve.error.message} `}
+            {task.completedBy?.name} 已於 {task.completedAt && formatTime(task.completedAt)} 核准
+            {task.comment ? `：「${task.comment}」` : '。'}
+          </span>
+        </section>
+      )}
+      <Card title="進度">
+        <Progress request={r} />
+      </Card>
+      <Card title="時間軸">
+        <Timeline request={r} />
+      </Card>
+    </div>
+  );
+}
+
+function ApprovePanel({
+  task,
+  title,
+  approve,
+}: {
+  task: RequestTask;
+  title: string;
+  approve: ReturnType<typeof useApproveTask>;
+}) {
+  const [comment, setComment] = useState('');
+
+  return (
+    <section className="grid gap-3 rounded-xl border-2 border-primary/40 bg-accent/40 p-4">
+      <h2 className="font-semibold">
+        輪到你：{task.nodeName}
+        <span className="ml-2 font-normal text-[0.86em] text-muted-foreground">
+          收到於 {timeAgo(task.createdAt)}
+        </span>
+      </h2>
+      <textarea
+        value={comment}
+        onChange={(e) => setComment(e.target.value)}
+        maxLength={2000}
+        aria-label="意見"
+        placeholder="意見（選填），會顯示在時間軸上"
+        className="min-h-[4.5em] w-full resize-y rounded-lg border border-input bg-card px-[0.8em] py-[0.55em] placeholder:text-muted-foreground/80 focus:border-ring focus:shadow-[0_0_0_3px_color-mix(in_oklch,var(--ring)_28%,transparent)] focus:outline-none"
+      />
+      {approve.isError && (
+        <p role="alert" className="rounded-lg bg-destructive/10 px-3 py-2 text-destructive">
+          {approve.error.message}
+        </p>
+      )}
+      <div className="flex justify-end">
+        <Button
+          disabled={approve.isPending}
+          onClick={() =>
+            approve.mutate(
+              { id: task.id, version: task.version, comment },
+              { onSuccess: () => toast(`已核准「${title}」`) },
+            )
+          }
+        >
+          {approve.isPending ? '送出中…' : '核准'}
+        </Button>
+      </div>
+    </section>
+  );
+}

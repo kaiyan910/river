@@ -24,11 +24,17 @@ import {
   processVersionSchema,
   publishProcessSchema,
   publishRejectedSchema,
+  type StartableProcess,
   saveDraftSchema,
+  startableProcessListSchema,
 } from '@river/contracts';
 import { createZodDto } from 'nestjs-zod';
 import type { ActiveParticipant } from '../auth/active-participant.js';
-import { CurrentParticipant, RequirePermission } from '../auth/require-permission.js';
+import {
+  CurrentParticipant,
+  RequireParticipant,
+  RequirePermission,
+} from '../auth/require-permission.js';
 import { ProcessesService } from './processes.service.js';
 
 class ProcessDto extends createZodDto(processSchema) {}
@@ -38,6 +44,7 @@ class SaveDraftDto extends createZodDto(saveDraftSchema) {}
 class PublishProcessDto extends createZodDto(publishProcessSchema) {}
 class ProcessVersionDto extends createZodDto(processVersionSchema) {}
 class PublishRejectedDto extends createZodDto(publishRejectedSchema) {}
+class StartableProcessListDto extends createZodDto(startableProcessListSchema) {}
 
 const Id = () => Param('id', new ParseUUIDPipe());
 
@@ -51,6 +58,14 @@ export class ProcessesController {
   @ApiOkResponse({ type: ProcessListDto })
   list(): Promise<ProcessSummary[]> {
     return this.processes.list();
+  }
+
+  /** 入口網站：任何 Participant 都可以看到已發佈的 Process。之後由 Initiator Role 限制。 */
+  @Get('startable')
+  @RequireParticipant()
+  @ApiOkResponse({ type: StartableProcessListDto })
+  startable(): Promise<StartableProcess[]> {
+    return this.processes.startable();
   }
 
   @Get(':id')

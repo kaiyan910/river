@@ -8,6 +8,11 @@
       "source": "./src/index.ts",
       "types": "./src/index.ts",
       "default": "./dist/index.js"
+    },
+    "./workflow": {
+      "source": "./src/workflow.ts",
+      "types": "./src/workflow.ts",
+      "default": "./dist/workflow.js"
     }
   },
   "scripts": {

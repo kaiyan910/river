@@ -165,3 +165,139 @@ export const publishRejectedSchema = z.object({
   errors: z.array(dslErrorSchema),
 });
 export type PublishRejected = z.infer<typeof publishRejectedSchema>;
+
+// ─── 入口網站：發起 Request ──────────────────────────────────────────────
+
+/** 流程預覽的一步：從「開始」沿著連線走到「結束」。審批節點帶審批人。 */
+export const processStepSchema = z.object({
+  nodeId: z.string(),
+  type: z.enum(['start', 'approval', 'end']),
+  name: z.string(),
+  assignee: actorSchema.nullable(),
+});
+export type ProcessStep = z.infer<typeof processStepSchema>;
+
+/** `GET /api/processes/startable`：目前登入的 Participant 可以發起的 Process（已發佈的目前版本）。 */
+export const startableProcessSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  version: z.number().int().positive(),
+  steps: z.array(processStepSchema),
+});
+export type StartableProcess = z.infer<typeof startableProcessSchema>;
+export const startableProcessListSchema = z.array(startableProcessSchema);
+
+// ─── Request 與 Task ─────────────────────────────────────────────────────
+
+export const requestStatusSchema = z.enum(['running', 'completed']);
+export type RequestStatus = z.infer<typeof requestStatusSchema>;
+
+export const taskStatusSchema = z.enum(['open', 'completed']);
+export type TaskStatus = z.infer<typeof taskStatusSchema>;
+
+/** `POST /api/requests`：以 Process 的目前版本發起 Request。 */
+export const startRequestSchema = z.object({
+  processId: z.uuid(),
+  title: z.string().trim().min(1).max(200),
+});
+export type StartRequestInput = z.infer<typeof startRequestSchema>;
+
+const requestProcessSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  /** 發起時鎖定的 Process Version。 */
+  version: z.number().int().positive(),
+});
+
+/** Request 目前在等的 Task；清單上的「目前步驟」。 */
+const pendingTaskSchema = z.object({ id: z.string(), nodeName: z.string(), assignee: actorSchema });
+
+/** `GET /api/requests/mine` 的一列。 */
+export const requestSummarySchema = z.object({
+  id: z.string(),
+  /** 給人看的流水號，畫面顯示成 R-000042。 */
+  number: z.number().int().positive(),
+  title: z.string(),
+  status: requestStatusSchema,
+  process: requestProcessSchema,
+  initiator: actorSchema,
+  /** running 卻沒有 open Task 時，代表 workflow 正在往下一步走（畫面顯示「處理中」）。 */
+  openTasks: z.array(pendingTaskSchema),
+  createdAt: z.iso.datetime(),
+  /** 最後一筆 request_event 的時間。 */
+  updatedAt: z.iso.datetime(),
+});
+export type RequestSummary = z.infer<typeof requestSummarySchema>;
+export const requestSummaryListSchema = z.array(requestSummarySchema);
+
+export const requestTaskSchema = z.object({
+  id: z.string(),
+  nodeId: z.string(),
+  nodeName: z.string(),
+  assignee: actorSchema,
+  status: taskStatusSchema,
+  outcome: z.enum(['approved']).nullable(),
+  comment: z.string().nullable(),
+  completedBy: actorSchema.nullable(),
+  completedAt: z.iso.datetime().nullable(),
+  /** 樂觀鎖版本號；完成 Task 時要帶上看到的版本。 */
+  version: z.number().int().positive(),
+  createdAt: z.iso.datetime(),
+});
+export type RequestTask = z.infer<typeof requestTaskSchema>;
+
+export const requestEventTypeSchema = z.enum([
+  'request.started',
+  'task.created',
+  'task.completed',
+  'request.completed',
+]);
+export type RequestEventType = z.infer<typeof requestEventTypeSchema>;
+
+/** 時間軸的一列，直接對應一筆 request_event。 */
+export const requestEventSchema = z.object({
+  id: z.number().int(),
+  type: requestEventTypeSchema,
+  at: z.iso.datetime(),
+  /** 做這件事的人；系統事件（流轉、完成）為 null。 */
+  actor: actorSchema.nullable(),
+  task: z.object({ id: z.string(), nodeName: z.string(), assignee: actorSchema }).nullable(),
+  comment: z.string().nullable(),
+});
+export type RequestEvent = z.infer<typeof requestEventSchema>;
+
+/** `GET /api/requests/:id`：發起人與經手的審批人可以查看。 */
+export const requestDetailSchema = requestSummarySchema.extend({
+  /** 發起時鎖定的 Process Version 的流程預覽。 */
+  steps: z.array(processStepSchema),
+  /** 依建立時間排序。 */
+  tasks: z.array(requestTaskSchema),
+  /** 依發生順序排序。 */
+  events: z.array(requestEventSchema),
+});
+export type RequestDetail = z.infer<typeof requestDetailSchema>;
+
+/** `GET /api/tasks/mine?status=open|completed`：「我的待辦」的一列。 */
+export const myTaskSchema = requestTaskSchema.extend({
+  request: requestSummarySchema.pick({
+    id: true,
+    number: true,
+    title: true,
+    status: true,
+    process: true,
+    initiator: true,
+  }),
+});
+export type MyTask = z.infer<typeof myTaskSchema>;
+export const myTaskListSchema = z.array(myTaskSchema);
+
+export const myTasksQuerySchema = z.object({ status: taskStatusSchema.default('open') });
+
+/** `POST /api/tasks/:id/complete`：核准。version 是畫面上看到的 Task 版本（樂觀鎖）。 */
+export const completeTaskSchema = z.object({
+  outcome: z.literal('approved'),
+  version: z.number().int().positive(),
+  comment: z.string().trim().max(2000).optional(),
+});
+export type CompleteTaskInput = z.input<typeof completeTaskSchema>;
+export type CompleteTaskCommand = z.output<typeof completeTaskSchema>;
