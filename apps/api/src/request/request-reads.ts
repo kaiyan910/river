@@ -11,12 +11,14 @@ import {
   type Database,
   processes,
   processVersions,
+  requestData,
   requestEvents,
   requests,
   tasks,
 } from '@river/db';
+import { formIdOf } from '@river/dsl';
 import { and, asc, desc, eq, inArray, max, type SQL } from 'drizzle-orm';
-import { participantNames, stepsOf } from '../process/processes.service.js';
+import { assigneesOf, participantNames, stepsOf } from '../process/processes.service.js';
 import { DATABASE } from '../tokens.js';
 
 type Names = Map<string, string>;
@@ -57,7 +59,10 @@ export class RequestReads {
     });
   }
 
-  /** 發起人與經手的審批人看得到；其他人（包括不存在的 Request）回 undefined。 */
+  /**
+   * 發起人與經手的審批人、填表人看得到；其他人（包括不存在的 Request）回 undefined。
+   * 看得到的人也看得到每一步填寫的 Form 資料（唯讀）。
+   */
   async detail(requestId: string, viewerId: string): Promise<RequestDetail | undefined> {
     const [summary] = await this.summaries(eq(requests.id, requestId));
     if (!summary) return undefined;
@@ -81,15 +86,21 @@ export class RequestReads {
       .from(requestEvents)
       .where(eq(requestEvents.requestId, requestId))
       .orderBy(asc(requestEvents.id));
+    const dataRows = await this.db
+      .select()
+      .from(requestData)
+      .where(eq(requestData.requestId, requestId))
+      .orderBy(asc(requestData.submittedAt));
 
-    const dsl = version?.dsl ?? { nodes: [], edges: [] };
+    const dsl = version?.dsl ?? { nodes: [], edges: [], forms: [] };
     const names = await participantNames(this.db, [
       ...taskRows.flatMap(taskPeople),
       ...eventRows.flatMap((e) => (e.actorId ? [e.actorId] : [])),
-      ...dsl.nodes.flatMap((n) =>
-        n.type === 'approval' && n.assignee ? [n.assignee.participantId] : [],
-      ),
+      ...dataRows.map((d) => d.submittedBy),
+      ...assigneesOf(dsl),
     ]);
+    const nodeNames = new Map(dsl.nodes.map((n) => [n.id, n.name]));
+    const usedForms = new Set(dsl.nodes.map(formIdOf));
     const taskById = new Map(taskRows.map((t) => [t.id, t]));
     const events: RequestEvent[] = eventRows.map((e) => {
       const task = e.taskId ? taskById.get(e.taskId) : undefined;
@@ -99,7 +110,12 @@ export class RequestReads {
         at: iso(e.at),
         actor: e.actorId ? actor(names, e.actorId) : null,
         task: task
-          ? { id: task.id, nodeName: task.nodeName, assignee: actor(names, task.assigneeId) }
+          ? {
+              id: task.id,
+              nodeName: task.nodeName,
+              kind: task.kind,
+              assignee: actor(names, task.assigneeId),
+            }
           : null,
         comment: e.comment,
       };
@@ -107,6 +123,15 @@ export class RequestReads {
     return {
       ...summary,
       steps: stepsOf(dsl, names),
+      forms: dsl.forms.filter((f) => usedForms.has(f.id)),
+      data: dataRows.map((d) => ({
+        nodeId: d.nodeId,
+        nodeName: nodeNames.get(d.nodeId) ?? d.nodeId,
+        formId: d.formId,
+        data: d.data,
+        submittedBy: actor(names, d.submittedBy),
+        submittedAt: iso(d.submittedAt),
+      })),
       tasks: taskRows.map((t) => toTask(t, names)),
       events,
     };
@@ -181,6 +206,7 @@ function toTask(t: TaskRow, names: Names): RequestTask {
     id: t.id,
     nodeId: t.nodeId,
     nodeName: t.nodeName,
+    kind: t.kind,
     assignee: actor(names, t.assigneeId),
     status: t.status,
     outcome: t.outcome,

@@ -30,6 +30,7 @@ function approvalFlow(approverId: string | null): ProcessDsl {
       { id: 'e1', source: 'start', target: 'manager' },
       { id: 'e2', source: 'manager', target: 'end' },
     ],
+    forms: [],
   };
 }
 

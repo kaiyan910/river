@@ -4,14 +4,14 @@
 
 **Blocked by:** 04（發起並核准最小的 Request）
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] 表單設計器（dnd-kit）支援以下欄位：單行文字、多行文字、數字、金額、日期、單選、多選、checkbox；可以設定必填和簡單的驗證規則
-- [ ] Form 屬於 Process，並隨 Process Version 一起存成快照
-- [ ] 渲染端從 Form schema 產生 Zod，交給 TanStack Form 驗證；API 端用同一份 schema 驗證，資料不合法時拒絕
-- [ ] 新增 form（填表）節點類型；DSL 檢查器新增一條規則：填表節點必須指定 Form
-- [ ] Form 資料依步驟存入 request_data；審批人在 Task 畫面以唯讀方式看到
-- [ ] 安全測試（Seam ①）：跑完一筆 Request 後，Temporal history 的所有 payload 中都找不到任何表單欄位的值
+- [x] 表單設計器（dnd-kit）支援以下欄位：單行文字、多行文字、數字、金額、日期、單選、多選、checkbox；可以設定必填和簡單的驗證規則
+- [x] Form 屬於 Process，並隨 Process Version 一起存成快照
+- [x] 渲染端從 Form schema 產生 Zod，交給 TanStack Form 驗證；API 端用同一份 schema 驗證，資料不合法時拒絕
+- [x] 新增 form（填表）節點類型；DSL 檢查器新增一條規則：填表節點必須指定 Form
+- [x] Form 資料依步驟存入 request_data；審批人在 Task 畫面以唯讀方式看到
+- [x] 安全測試（Seam ①）：跑完一筆 Request 後，Temporal history 的所有 payload 中都找不到任何表單欄位的值
 
 ## Comments
 
@@ -50,3 +50,53 @@
   - 「不能早於今天」在 API 端要用固定時區（Asia/Taipei）判斷。
   - 金額存成數字，最多兩位小數；數字欄位只接受整數。
   - 原型的檢查器沒有連線相關規則；正式版沿用 `@river/dsl` 既有的檢查，再加上上面的規則。
+
+**2026-09-26 · 實作結果**
+
+- `packages/forms`（新）：
+  - Form schema（8 種欄位）、`formToZod`／`validateFormData`、`checkForm`，都是純函式，不含 React。
+  - 渲染元件放在 `apps/web/src/components/form-fields.tsx`，API 依賴 forms 時才不會帶進 React；TECH-STACK 的 monorepo 結構已同步修改。
+  - 輸入可以是畫面上的字串，輸出是正規化後的資料：文字去掉前後空白、數字與金額轉成 number、選填空值存成 null、多選是陣列、checkbox 是 boolean。
+  - 文字沒設上限時，單行文字最多 200 字、多行文字最多 5000 字。
+  - 「不能早於今天」用 `todayIn()`，以 Asia/Taipei 為準。
+  - 格式（正規表示式）會擋下「被重複的群組裡有重複或分支」這類寫法（例如 `(a+)+`、`(a|aa)+`），長度上限 100，以防 ReDoS。驗證時不執行沒通過這項檢查的格式。
+  - 比原型多兩條檢查規則：`FORM_NO_NAME`（Form 沒有名稱）、`FIELD_DUPLICATE_OPTION`（選項空白或重複）。
+- DSL：
+  - 新增 `form` 節點（`formId`、`assignee`）。開始節點可以指定 `formId`。
+  - Form 放在 DSL 的 `forms`，草稿與 Process Version 一起存成快照。
+  - 檢查器新增 `FORM_NODE_NO_FORM`、`FORM_NODE_NO_ASSIGNEE`、`NODE_FORM_MISSING`。節點用到的 Form 的錯誤一併回報，帶 `formId`／`fieldId`，同一份 Form 只回報一次。
+- DB（migration `0004_request_data`）：
+  - `request_data` 依步驟存資料：request、node、form、data、填寫人、時間；(request_id, node_id) 唯一。
+  - `tasks.kind` 是 `approval` 或 `form`，`outcome` 多了 `submitted`。
+  - 既有的草稿與 Process Version 補上空的 `forms`。
+- Worker：
+  - 填表節點和審批節點一樣建立 Task 並等 `taskCompleted`。
+  - `loadProcessVersion` 只回傳節點與連線，Form schema 不進 Temporal history。
+  - 既有的 workflow 沒有 form 節點，走的路徑不變，所以沒有用 `patched()`。
+- API：
+  - `POST /api/requests` 可以帶 `data`（開始表單）；`POST /api/tasks/:id/complete` 用 `outcome: 'submitted'` 加 `data` 送出填表 Task。
+  - 兩者都依鎖定版本裡的 Form 驗證，不合法時回 422 `{ message, errors: { 欄位代碼: 訊息 } }`；資料和狀態變化在同一個 transaction 寫入 `request_data`。
+  - 沒有開始表單的 Process 帶 `data` 也回 422。`outcome` 和 Task 類型不符時回 422。
+  - `GET /api/processes/startable` 多了 `startForm`，步驟多了 `formId`。
+  - `GET /api/requests/:id` 多了 `forms`（有節點使用的 Form）與 `data`（每一步的資料）。Task 與時間軸事件帶 `kind`。
+- Web：
+  - 流程設計頁多了「流程｜各 Form｜＋」分頁；Form 分頁照原型 C：欄位表格、dnd-kit 拖拉與鍵盤排序、展開設定規則、「用在」勾選、即時預覽。
+  - 節點面板多了「填表」。屬性面板有 Form 下拉選單、「打開這份 Form 的分頁 →」「＋ 建立新 Form」。
+  - 畫布節點顯示指定的 Form 名稱與欄位數，沒有欄位摘要（B 那種摘要沒有採用）。
+  - 發起頁、填表 Task 用 TanStack Form 搭配 `formToZod` 驗證：blur 時驗證該欄，送出時驗證全部並顯示「有 N 個欄位需要修正」；API 回 422 時把錯誤顯示在欄位下方。
+  - 申請內容依步驟分組顯示唯讀資料，時間軸顯示「X 在『節點』送出表單」。
+- 測試：
+  - `packages/forms` 44 個測試（驗證與 Form 檢查）。
+  - Seam ②：DSL 檢查新增 8 個 Form 相關測試。
+  - Seam ①：`apps/api/test/forms.test.ts` 有 8 個測試：快照、發佈檢查、入口網站、422、request_data 與唯讀、填表 Task、沒有開始表單，以及安全測試。安全測試會解碼 Temporal history 的所有 payload，確認找不到任何欄位值，也找不到 Form 名稱。暫時讓 Signal 夾帶資料時，這個測試會失敗。
+  - 本機瀏覽器走過一次：設計 Form → 發佈 → 用開始表單發起 → 填表 Task → 唯讀顯示。
+- 與原型結論不同的地方：
+  - 即時預覽的「驗證規則」分頁是各欄位規則的清單，不是 Zod 程式碼：產生的 Zod 包含 transform，沒辦法有意義地印出來。
+  - 「審批人看到」只在試送出通過驗證後顯示；沒通過時，request_data 分頁會顯示 API 會回的錯誤。
+- 已知限制、留給後續：
+  - `request_data` 每一步只有一列。Return 之後重新送出要覆寫或保留歷史，在 06 決定。
+  - 已發佈版本的分頁只顯示流程畫布，還不能打開當時的 Form。
+  - `'approved' | 'submitted'` 與 Task 類型分別定義在 db、contracts、workflow 合約三處，新增結果時要一起改。
+  - 格式的 ReDoS 防護是保守的語法檢查，不是線性時間的 regex engine；如果 Designer 需要更複雜的格式，要改用 RE2 之類的 engine。
+  - 本機開發資料庫多了一個測試用的 Process「出差申請（issue 05 測試）」和一筆 Request，可以刪掉。
+

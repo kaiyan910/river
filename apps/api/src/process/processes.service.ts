@@ -14,7 +14,15 @@ import type {
   StartableProcess,
 } from '@river/contracts';
 import { authUsers, type Database, participants, processes, processVersions } from '@river/db';
-import { checkProcess, initialProcessDsl, mainPath, type ProcessDsl } from '@river/dsl';
+import {
+  checkProcess,
+  formIdOf,
+  initialProcessDsl,
+  mainPath,
+  type ProcessDsl,
+  type ProcessNode,
+} from '@river/dsl';
+import type { FormSchema } from '@river/forms';
 import { asc, desc, eq, inArray, max } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
 import type { ActiveParticipant } from '../auth/active-participant.js';
@@ -55,15 +63,14 @@ export class ProcessesService {
     const rows = await currentVersions(this.db);
     const names = await participantNames(
       this.db,
-      rows
-        .flatMap((r) => r.dsl.nodes)
-        .flatMap((n) => (n.type === 'approval' && n.assignee ? [n.assignee.participantId] : [])),
+      rows.flatMap((r) => assigneesOf(r.dsl)),
     );
     return rows.map((r) => ({
       id: r.id,
       name: r.name,
       version: r.version,
       steps: stepsOf(r.dsl, names),
+      startForm: startFormOf(r.dsl),
     }));
   }
 
@@ -250,15 +257,37 @@ export async function participantNames(
   return new Map(rows.map((r) => [r.id, r.name]));
 }
 
-/** 流程預覽：沿著主線列出每個節點，審批節點帶審批人。 */
+/** 審批與填表節點指派的 Participant。 */
+export function assigneesOf(dsl: ProcessDsl): string[] {
+  return dsl.nodes.flatMap((n) =>
+    (n.type === 'approval' || n.type === 'form') && n.assignee ? [n.assignee.participantId] : [],
+  );
+}
+
+/** 開始或填表節點使用的 Form；其他節點或沒有指定時為 null。 */
+export function formOf(dsl: ProcessDsl, node: ProcessNode | undefined): FormSchema | null {
+  const formId = node && formIdOf(node);
+  return (formId && dsl.forms.find((f) => f.id === formId)) || null;
+}
+
+export function startFormOf(dsl: ProcessDsl): FormSchema | null {
+  return formOf(
+    dsl,
+    dsl.nodes.find((n) => n.type === 'start'),
+  );
+}
+
+/** 流程預覽：沿著主線列出每個節點，審批與填表節點帶處理人，開始與填表節點帶 Form。 */
 export function stepsOf(dsl: ProcessDsl, names: Map<string, string>): ProcessStep[] {
   return mainPath(dsl).map((node) => {
-    const assigneeId = node.type === 'approval' ? node.assignee?.participantId : undefined;
+    const assigneeId =
+      node.type === 'approval' || node.type === 'form' ? node.assignee?.participantId : undefined;
     return {
       nodeId: node.id,
       type: node.type,
       name: node.name,
       assignee: assigneeId ? { id: assigneeId, name: names.get(assigneeId) ?? '' } : null,
+      formId: formOf(dsl, node)?.id ?? null,
     };
   });
 }

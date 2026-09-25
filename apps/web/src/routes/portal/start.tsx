@@ -1,13 +1,12 @@
 import type { StartableProcess } from '@river/contracts';
 import { useQuery } from '@tanstack/react-query';
 import { useNavigate } from '@tanstack/react-router';
-import { Flag, MousePointerClick, Play } from 'lucide-react';
-import { type FormEvent, useState } from 'react';
+import { ClipboardPen, Flag, MousePointerClick, Play } from 'lucide-react';
+import { useState } from 'react';
+import { FormRunner } from '@/components/form-fields';
 import { toast } from '@/components/toast';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
-import { startableProcessesQueryOptions, useStartRequest } from '@/lib/requests';
+import { formRejection, startableProcessesQueryOptions, useStartRequest } from '@/lib/requests';
 import { cn } from '@/lib/utils';
 import { Card, EmptyDetail, ListColumn, ListMessage, ListSearch } from './request-view';
 
@@ -77,23 +76,10 @@ export function StartPage({
 function StartForm({ process, onCancel }: { process: StartableProcess; onCancel: () => void }) {
   const start = useStartRequest();
   const navigate = useNavigate();
-  const [title, setTitle] = useState('');
-
-  function submit(event: FormEvent) {
-    event.preventDefault();
-    start.mutate(
-      { processId: process.id, title: title.trim() },
-      {
-        onSuccess: (request) => {
-          toast(`已送出「${request.title}」`);
-          void navigate({ to: '/requests', search: { id: request.id } });
-        },
-      },
-    );
-  }
+  const rejected = formRejection(start.error);
 
   return (
-    <form onSubmit={submit} className="mx-auto grid max-w-[720px] gap-5 px-6 py-8">
+    <div className="mx-auto grid max-w-[720px] gap-5 px-6 py-8">
       <header className="grid gap-1">
         <span className="font-mono text-[0.84em] text-muted-foreground">
           Process Version {process.version}
@@ -112,10 +98,13 @@ function StartForm({ process, onCancel }: { process: StartableProcess; onCancel:
               <span
                 className={cn(
                   'inline-flex items-center gap-1 rounded-md px-2 py-0.5',
-                  step.type === 'approval' ? 'bg-accent text-accent-foreground' : 'bg-muted',
+                  step.type === 'approval' || step.type === 'form'
+                    ? 'bg-accent text-accent-foreground'
+                    : 'bg-muted',
                 )}
               >
                 {step.type === 'start' && <Play size={11} aria-hidden />}
+                {step.type === 'form' && <ClipboardPen size={11} aria-hidden />}
                 {step.type === 'end' && <Flag size={11} aria-hidden />}
                 {step.name}
                 {step.assignee && `：${step.assignee.name}`}
@@ -125,30 +114,38 @@ function StartForm({ process, onCancel }: { process: StartableProcess; onCancel:
         </ol>
       </Card>
       <Card title="申請內容">
-        <div className="grid gap-1.5">
-          <Label htmlFor="request-title">標題</Label>
-          <Input
-            id="request-title"
-            value={title}
-            maxLength={200}
-            onChange={(e) => setTitle(e.target.value)}
-            placeholder={`例如：${process.name}－10/2`}
-          />
-        </div>
+        <FormRunner
+          key={process.id}
+          form={process.startForm}
+          withTitle={{ placeholder: `例如：${process.name}－10/2` }}
+          submitLabel="送出申請"
+          pending={start.isPending}
+          serverErrors={rejected?.errors}
+          error={
+            start.isError && (
+              <p role="alert" className="text-destructive">
+                {start.error.message}
+              </p>
+            )
+          }
+          actions={
+            <Button type="button" variant="ghost" onClick={onCancel}>
+              取消
+            </Button>
+          }
+          onSubmit={({ title, data }) =>
+            start.mutate(
+              { processId: process.id, title, data: process.startForm ? data : undefined },
+              {
+                onSuccess: (request) => {
+                  toast(`已送出「${request.title}」`);
+                  void navigate({ to: '/requests', search: { id: request.id } });
+                },
+              },
+            )
+          }
+        />
       </Card>
-      {start.isError && (
-        <p role="alert" className="text-destructive">
-          {start.error.message}
-        </p>
-      )}
-      <div className="flex items-center justify-end gap-2">
-        <Button type="button" variant="ghost" onClick={onCancel}>
-          取消
-        </Button>
-        <Button type="submit" disabled={!title.trim() || start.isPending}>
-          {start.isPending ? '送出中…' : '送出申請'}
-        </Button>
-      </div>
-    </form>
+    </div>
   );
 }

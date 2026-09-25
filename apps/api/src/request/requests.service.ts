@@ -4,8 +4,9 @@ import { INTERPRET_PROCESS_WORKFLOW, type InterpretProcessInput } from '@river/c
 import { type Database, requestEvents, requests } from '@river/db';
 import { Client } from '@temporalio/client';
 import type { ActiveParticipant } from '../auth/active-participant.js';
-import { currentVersions } from '../process/processes.service.js';
+import { currentVersions, startFormOf } from '../process/processes.service.js';
 import { DATABASE, TEMPORAL_CLIENT, TEMPORAL_TASK_QUEUE } from '../tokens.js';
+import { saveStepData, validateStepData } from './form-data.js';
 import { RequestReads } from './request-reads.js';
 
 @Injectable()
@@ -19,12 +20,16 @@ export class RequestsService {
 
   /**
    * 以 Process 的目前版本發起 Request，並啟動 workflow ID 等於 Request ID 的 interpreter workflow。
+   * 開始表單的資料先依 Process Version 裡的 Form 驗證，和 Request 一起存進 request_data；
+   * workflow 的輸入只有 ID，不帶任何表單資料。
    * workflow 在 transaction 提交前啟動：啟動失敗時 Request 不會留下；
    * 萬一 workflow 的 activity 比提交早執行，讀不到 Request 會重試。
    */
   async start(input: StartRequestInput, me: ActiveParticipant): Promise<RequestDetail> {
     const [current] = await currentVersions(this.db, input.processId);
     if (!current) throw new NotFoundException('找不到可以發起的 Process');
+    const submission = validateStepData(startFormOf(current.dsl), input.data);
+    const startNode = current.dsl.nodes.find((n) => n.type === 'start');
 
     const requestId = await this.db.transaction(async (tx) => {
       const [created] = await tx
@@ -35,6 +40,12 @@ export class RequestsService {
       await tx
         .insert(requestEvents)
         .values({ requestId: created.id, type: 'request.started', actorId: me.id });
+      if (startNode)
+        await saveStepData(tx, submission, {
+          requestId: created.id,
+          nodeId: startNode.id,
+          submittedBy: me.id,
+        });
 
       const workflowInput: InterpretProcessInput = {
         requestId: created.id,

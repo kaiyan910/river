@@ -172,7 +172,11 @@ export const requests = pgTable(
 
 export const TASK_STATUSES = ['open', 'completed'] as const;
 export type TaskStatus = (typeof TASK_STATUSES)[number];
-export type TaskOutcome = 'approved';
+/** 審批 Task 的結果是 approved；填表 Task 送出後是 submitted。 */
+export type TaskOutcome = 'approved' | 'submitted';
+/** 對應產生 Task 的節點類型。 */
+export const TASK_KINDS = ['approval', 'form'] as const;
+export type TaskKind = (typeof TASK_KINDS)[number];
 
 /**
  * Request 流轉到人工步驟時由 workflow 建立。ID 由 workflow 產生，activity 重試時不會重複建立。
@@ -187,6 +191,7 @@ export const tasks = pgTable(
       .references(() => requests.id),
     nodeId: text('node_id').notNull(),
     nodeName: text('node_name').notNull(),
+    kind: text('kind').$type<TaskKind>().notNull().default('approval'),
     assigneeId: uuid('assignee_id')
       .notNull()
       .references(() => participants.id),
@@ -225,4 +230,27 @@ export const requestEvents = pgTable(
     at: timestamp('at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [index().on(t.requestId, t.id)],
+);
+
+/**
+ * Form 資料：依步驟（開始節點、填表節點）各存一列，只存在 Postgres，絕不進入 Temporal。
+ * data 是依 Process Version 裡的 Form schema 驗證、正規化後的內容，鍵是欄位代碼。
+ */
+export const requestData = pgTable(
+  'request_data',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    requestId: uuid('request_id')
+      .notNull()
+      .references(() => requests.id),
+    nodeId: text('node_id').notNull(),
+    /** 填寫時用的 Form（Process Version 快照裡的 id）。 */
+    formId: text('form_id').notNull(),
+    data: jsonb('data').$type<Record<string, unknown>>().notNull(),
+    submittedBy: uuid('submitted_by')
+      .notNull()
+      .references(() => participants.id),
+    submittedAt: timestamp('submitted_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [unique().on(t.requestId, t.nodeId)],
 );

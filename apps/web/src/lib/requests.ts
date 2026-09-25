@@ -1,4 +1,6 @@
 import {
+  type FormRejected,
+  formRejectedSchema,
   myTaskListSchema,
   type RequestDetail,
   type RequestSummary,
@@ -8,7 +10,7 @@ import {
   type TaskStatus,
 } from '@river/contracts';
 import { queryOptions, useMutation, useQueryClient } from '@tanstack/react-query';
-import { api } from '@/lib/api';
+import { ApiError, api } from '@/lib/api';
 
 /** workflow 在背景往下一步走的空檔（running 但沒有 open Task）；畫面顯示「處理中」並輪詢。 */
 export function isAdvancing(r: Pick<RequestSummary, 'status' | 'openTasks'>): boolean {
@@ -57,20 +59,32 @@ function useRequestChanged() {
 export function useStartRequest() {
   const changed = useRequestChanged();
   return useMutation({
-    mutationFn: (input: { processId: string; title: string }) =>
+    mutationFn: (input: { processId: string; title: string; data?: Record<string, unknown> }) =>
       api('/requests', { method: 'POST', body: input, schema: requestDetailSchema }),
     onSuccess: changed,
   });
 }
 
-export function useApproveTask() {
+type CompleteTask =
+  | { id: string; version: number; outcome: 'approved'; comment: string }
+  | { id: string; version: number; outcome: 'submitted'; data: Record<string, unknown> };
+
+/** 核准審批 Task，或送出填表 Task 的 Form 資料。 */
+export function useCompleteTask() {
   const changed = useRequestChanged();
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: ({ id, version, comment }: { id: string; version: number; comment: string }) =>
-      api(`/tasks/${id}/complete`, {
+    mutationFn: (task: CompleteTask) =>
+      api(`/tasks/${task.id}/complete`, {
         method: 'POST',
-        body: { outcome: 'approved', version, comment: comment.trim() || undefined },
+        body:
+          task.outcome === 'approved'
+            ? {
+                outcome: 'approved',
+                version: task.version,
+                comment: task.comment.trim() || undefined,
+              }
+            : { outcome: 'submitted', version: task.version, data: task.data },
         schema: requestDetailSchema,
       }),
     onSuccess: changed,
@@ -81,6 +95,13 @@ export function useApproveTask() {
         queryClient.invalidateQueries({ queryKey: ['tasks', 'mine'] }),
       ]),
   });
+}
+
+/** Form 資料沒通過 API 驗證（422）時各欄位的錯誤；其他錯誤回傳 null。 */
+export function formRejection(error: unknown): FormRejected | null {
+  if (!(error instanceof ApiError) || error.status !== 422) return null;
+  const parsed = formRejectedSchema.safeParse(error.body);
+  return parsed.success ? parsed.data : null;
 }
 
 /** R-000042 */

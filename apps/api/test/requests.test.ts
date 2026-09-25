@@ -34,6 +34,7 @@ function approvalChain(...steps: { id: string; name: string; approverId: string 
       { id: 'end', type: 'end', name: '結束', position: { x: 0, y: 170 * (steps.length + 1) } },
     ],
     edges: ids.slice(1).map((target, i) => ({ id: `e${i}`, source: ids[i] ?? '', target })),
+    forms: [],
   };
 }
 
@@ -128,15 +129,17 @@ describe('發起並核准 Request', () => {
       name: '請假',
       version: 1,
       steps: [
-        { nodeId: 'start', type: 'start', name: '開始', assignee: null },
+        { nodeId: 'start', type: 'start', name: '開始', assignee: null, formId: null },
         {
           nodeId: 'manager',
           type: 'approval',
           name: '主管審批',
           assignee: { id: approverId, name: '林美玲' },
+          formId: null,
         },
-        { nodeId: 'end', type: 'end', name: '結束', assignee: null },
+        { nodeId: 'end', type: 'end', name: '結束', assignee: null, formId: null },
       ],
+      startForm: null,
     });
   });
 

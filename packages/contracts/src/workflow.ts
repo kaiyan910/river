@@ -17,5 +17,6 @@ export const TASK_COMPLETED_SIGNAL = 'taskCompleted';
 
 export interface TaskCompletedSignal {
   taskId: string;
-  outcome: 'approved';
+  /** 只有決策結果；填表 Task 的 Form 資料留在 Postgres，不會放進 Signal。 */
+  outcome: 'approved' | 'submitted';
 }

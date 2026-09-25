@@ -1,3 +1,4 @@
+import type { FormSchema } from '@river/forms';
 import type { DslError } from './check.js';
 import type { NodeType, ProcessDsl, ProcessEdge, ProcessNode } from './schema.js';
 
@@ -43,11 +44,17 @@ export function toCanvas(dsl: ProcessDsl, errors: DslError[] = []): Canvas {
   };
 }
 
-/** 從畫布狀態取出 DSL；React Flow 自己加在節點與邊上的欄位（selected、measured…）會被捨棄。 */
-export function fromCanvas(canvas: {
-  nodes: readonly Pick<CanvasNode, 'id' | 'position' | 'data'>[];
-  edges: readonly CanvasEdge[];
-}): ProcessDsl {
+/**
+ * 從畫布狀態取出 DSL；React Flow 自己加在節點與邊上的欄位（selected、measured…）會被捨棄。
+ * 畫布只有節點與連線，Form 由表單設計器另外維護，一起組成 DSL。
+ */
+export function fromCanvas(
+  canvas: {
+    nodes: readonly Pick<CanvasNode, 'id' | 'position' | 'data'>[];
+    edges: readonly CanvasEdge[];
+  },
+  forms: FormSchema[] = [],
+): ProcessDsl {
   return {
     nodes: canvas.nodes.map(
       (n) =>
@@ -58,5 +65,6 @@ export function fromCanvas(canvas: {
         }) as ProcessNode,
     ),
     edges: canvas.edges.map(({ id, source, target }): ProcessEdge => ({ id, source, target })),
+    forms,
   };
 }

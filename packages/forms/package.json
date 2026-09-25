@@ -1,5 +1,5 @@
 {
-  "name": "@river/contracts",
+  "name": "@river/forms",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -8,25 +8,19 @@
       "source": "./src/index.ts",
       "types": "./src/index.ts",
       "default": "./dist/index.js"
-    },
-    "./workflow": {
-      "source": "./src/workflow.ts",
-      "types": "./src/workflow.ts",
-      "default": "./dist/workflow.js"
     }
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
   },
   "dependencies": {
-    "@river/auth": "workspace:*",
-    "@river/dsl": "workspace:*",
-    "@river/forms": "workspace:*",
     "zod": "^4.6.5"
   },
   "devDependencies": {
     "@river/config": "workspace:*",
-    "typescript": "~6.0.3"
+    "typescript": "~6.0.3",
+    "vitest": "^5.0.1"
   }
 }

@@ -1,6 +1,7 @@
 import type { RequestDetail, RequestEvent, RequestSummary } from '@river/contracts';
-import { Check, CheckCircle2, Circle, Loader2, Search } from 'lucide-react';
+import { Check, CheckCircle2, Circle, FileText, Loader2, Search } from 'lucide-react';
 import type { ReactNode } from 'react';
+import { FormDataView } from '@/components/form-fields';
 import { Avatar } from '@/components/people';
 import { Input } from '@/components/ui/input';
 import { isAdvancing, requestNumber } from '@/lib/requests';
@@ -176,6 +177,7 @@ export function RequestHeader({ request }: { request: RequestDetail }) {
   );
 }
 
+/** 標題，以及依步驟分組、唯讀的 Form 資料（開始表單、各填表節點）。 */
 export function RequestContent({ request }: { request: RequestDetail }) {
   return (
     <Card title="申請內容">
@@ -183,6 +185,25 @@ export function RequestContent({ request }: { request: RequestDetail }) {
         <dt className="text-muted-foreground">標題</dt>
         <dd>{request.title}</dd>
       </dl>
+      {request.data.map((section) => {
+        const form = request.forms.find((f) => f.id === section.formId);
+        if (!form) return null;
+        const step = request.steps.find((s) => s.nodeId === section.nodeId);
+        return (
+          <section key={section.nodeId} className="grid gap-2 border-t pt-3">
+            <h3 className="flex flex-wrap items-center gap-x-1.5 text-[0.88em]">
+              <FileText size={13} className="text-muted-foreground" aria-hidden />
+              <span className="font-medium">
+                {step?.type === 'start' ? '開始表單' : section.nodeName}
+              </span>
+              <span className="text-muted-foreground">
+                · {form.name} · {section.submittedBy.name} 填寫於 {formatTime(section.submittedAt)}
+              </span>
+            </h3>
+            <FormDataView form={form} data={section.data} />
+          </section>
+        );
+      })}
     </Card>
   );
 }
@@ -270,7 +291,9 @@ function describeEvent(e: RequestEvent): string {
     case 'task.created':
       return `流轉到「${e.task?.nodeName}」，等待 ${e.task?.assignee.name} 處理`;
     case 'task.completed':
-      return `${e.actor?.name} 在「${e.task?.nodeName}」核准`;
+      return e.task?.kind === 'form'
+        ? `${e.actor?.name} 在「${e.task?.nodeName}」送出表單`
+        : `${e.actor?.name} 在「${e.task?.nodeName}」核准`;
     case 'request.completed':
       return '申請完成';
   }

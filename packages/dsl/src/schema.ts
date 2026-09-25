@@ -1,8 +1,10 @@
+import { formSchema } from '@river/forms';
 import { z } from 'zod';
 
 /**
  * Process DSL：以節點與邊組成的有向圖，以 JSON 儲存。
- * 目前只有 start、approval、end；其他節點類型（form、condition、parallelSplit…）由後續 ticket 加入。
+ * 目前有 start、form、approval、end；其他節點類型（condition、parallelSplit…）由後續 ticket 加入。
+ * Form 屬於 Process，跟流程圖放在同一份 DSL，發佈時一起存成 Process Version 的快照。
  */
 
 const nodeIdSchema = z.string().min(1);
@@ -23,7 +25,15 @@ export const assigneeSchema = z.discriminatedUnion('type', [
 ]);
 export type Assignee = z.infer<typeof assigneeSchema>;
 
-export const startNodeSchema = z.object({ ...nodeBase, type: z.literal('start') });
+/** 節點使用的 Form（同一份 DSL 裡 forms 的 id）；草稿中可以還沒指定。 */
+const formRefSchema = z.string().min(1).nullish();
+
+/** 開始節點可以指定開始表單；沒有時發起人只填標題。 */
+export const startNodeSchema = z.object({
+  ...nodeBase,
+  type: z.literal('start'),
+  formId: formRefSchema,
+});
 export const endNodeSchema = z.object({ ...nodeBase, type: z.literal('end') });
 /** 審批節點；草稿中可以還沒指派（null），發佈前由檢查器擋下。 */
 export const approvalNodeSchema = z.object({
@@ -32,8 +42,17 @@ export const approvalNodeSchema = z.object({
   assignee: assigneeSchema.nullable(),
 });
 
+/** 填表節點：指派一位 Participant 填一份 Form；發佈前兩者都必須設定。 */
+export const formNodeSchema = z.object({
+  ...nodeBase,
+  type: z.literal('form'),
+  formId: formRefSchema,
+  assignee: assigneeSchema.nullable(),
+});
+
 export const processNodeSchema = z.discriminatedUnion('type', [
   startNodeSchema,
+  formNodeSchema,
   approvalNodeSchema,
   endNodeSchema,
 ]);
@@ -51,11 +70,18 @@ export type ProcessEdge = z.infer<typeof processEdgeSchema>;
 export const processDslSchema = z.object({
   nodes: z.array(processNodeSchema),
   edges: z.array(processEdgeSchema),
+  forms: z.array(formSchema).max(50).default([]),
 });
 export type ProcessDsl = z.infer<typeof processDslSchema>;
 
+/** 開始與填表節點使用的 Form id；其他節點或還沒指定時為 null。 */
+export function formIdOf(node: { type: NodeType; formId?: string | null }): string | null {
+  return (node.type === 'start' || node.type === 'form') && node.formId ? node.formId : null;
+}
+
 export const NODE_TYPE_LABELS: Record<NodeType, string> = {
   start: '開始',
+  form: '填表',
   approval: '審批',
   end: '結束',
 };
@@ -68,6 +94,7 @@ export function initialProcessDsl(): ProcessDsl {
       { id: 'end', type: 'end', name: NODE_TYPE_LABELS.end, position: { x: 0, y: 340 } },
     ],
     edges: [],
+    forms: [],
   };
 }
 

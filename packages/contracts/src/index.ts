@@ -1,5 +1,6 @@
 import { PERMISSIONS } from '@river/auth';
 import { DSL_ERROR_CODES, processDslSchema } from '@river/dsl';
+import { formSchema } from '@river/forms';
 import { z } from 'zod';
 
 /** `GET /api/me`：目前登入的 Participant。 */
@@ -105,6 +106,9 @@ export const dslErrorSchema = z.object({
   nodeId: z.string().nullable(),
   code: z.enum(DSL_ERROR_CODES),
   message: z.string(),
+  /** Form 本身的錯誤才有：哪一份 Form、哪個欄位。 */
+  formId: z.string().optional(),
+  fieldId: z.string().nullable().optional(),
 });
 
 /** 已發佈、不可修改的 Process Version。version 從 1 開始遞增。 */
@@ -168,12 +172,13 @@ export type PublishRejected = z.infer<typeof publishRejectedSchema>;
 
 // ─── 入口網站：發起 Request ──────────────────────────────────────────────
 
-/** 流程預覽的一步：從「開始」沿著連線走到「結束」。審批節點帶審批人。 */
+/** 流程預覽的一步：從「開始」沿著連線走到「結束」。審批與填表節點帶處理人，開始與填表節點帶 Form。 */
 export const processStepSchema = z.object({
   nodeId: z.string(),
-  type: z.enum(['start', 'approval', 'end']),
+  type: z.enum(['start', 'form', 'approval', 'end']),
   name: z.string(),
   assignee: actorSchema.nullable(),
+  formId: z.string().nullable(),
 });
 export type ProcessStep = z.infer<typeof processStepSchema>;
 
@@ -183,6 +188,8 @@ export const startableProcessSchema = z.object({
   name: z.string(),
   version: z.number().int().positive(),
   steps: z.array(processStepSchema),
+  /** 開始表單；沒有時發起人只填標題。 */
+  startForm: formSchema.nullable(),
 });
 export type StartableProcess = z.infer<typeof startableProcessSchema>;
 export const startableProcessListSchema = z.array(startableProcessSchema);
@@ -195,12 +202,24 @@ export type RequestStatus = z.infer<typeof requestStatusSchema>;
 export const taskStatusSchema = z.enum(['open', 'completed']);
 export type TaskStatus = z.infer<typeof taskStatusSchema>;
 
-/** `POST /api/requests`：以 Process 的目前版本發起 Request。 */
+/** Form 資料：鍵是欄位代碼。內容由 API 依 Process Version 裡的 Form schema 驗證。 */
+export const formDataSchema = z.record(z.string(), z.unknown());
+export type FormDataInput = z.infer<typeof formDataSchema>;
+
+/** `POST /api/requests`：以 Process 的目前版本發起 Request。有開始表單時 data 是開始表單的資料。 */
 export const startRequestSchema = z.object({
   processId: z.uuid(),
   title: z.string().trim().min(1).max(200),
+  data: formDataSchema.optional(),
 });
 export type StartRequestInput = z.infer<typeof startRequestSchema>;
+
+/** Form 資料沒有通過驗證時，發起或送出填表 Task 回 422 與這個內容；鍵是欄位代碼。 */
+export const formRejectedSchema = z.object({
+  message: z.string(),
+  errors: z.record(z.string(), z.string()),
+});
+export type FormRejected = z.infer<typeof formRejectedSchema>;
 
 const requestProcessSchema = z.object({
   id: z.string(),
@@ -230,13 +249,19 @@ export const requestSummarySchema = z.object({
 export type RequestSummary = z.infer<typeof requestSummarySchema>;
 export const requestSummaryListSchema = z.array(requestSummarySchema);
 
+export const taskKindSchema = z.enum(['approval', 'form']);
+export type TaskKind = z.infer<typeof taskKindSchema>;
+
 export const requestTaskSchema = z.object({
   id: z.string(),
   nodeId: z.string(),
   nodeName: z.string(),
+  /** 審批或填表。 */
+  kind: taskKindSchema,
   assignee: actorSchema,
   status: taskStatusSchema,
-  outcome: z.enum(['approved']).nullable(),
+  /** 審批 Task 核准後是 approved，填表 Task 送出後是 submitted。 */
+  outcome: z.enum(['approved', 'submitted']).nullable(),
   comment: z.string().nullable(),
   completedBy: actorSchema.nullable(),
   completedAt: z.iso.datetime().nullable(),
@@ -261,15 +286,32 @@ export const requestEventSchema = z.object({
   at: z.iso.datetime(),
   /** 做這件事的人；系統事件（流轉、完成）為 null。 */
   actor: actorSchema.nullable(),
-  task: z.object({ id: z.string(), nodeName: z.string(), assignee: actorSchema }).nullable(),
+  task: z
+    .object({ id: z.string(), nodeName: z.string(), kind: taskKindSchema, assignee: actorSchema })
+    .nullable(),
   comment: z.string().nullable(),
 });
 export type RequestEvent = z.infer<typeof requestEventSchema>;
 
-/** `GET /api/requests/:id`：發起人與經手的審批人可以查看。 */
+/** 某一步填寫的 Form 資料（request_data 的一列）。 */
+export const requestDataSectionSchema = z.object({
+  nodeId: z.string(),
+  nodeName: z.string(),
+  formId: z.string(),
+  data: formDataSchema,
+  submittedBy: actorSchema,
+  submittedAt: z.iso.datetime(),
+});
+export type RequestDataSection = z.infer<typeof requestDataSectionSchema>;
+
+/** `GET /api/requests/:id`：發起人與經手的審批人、填表人可以查看。 */
 export const requestDetailSchema = requestSummarySchema.extend({
   /** 發起時鎖定的 Process Version 的流程預覽。 */
   steps: z.array(processStepSchema),
+  /** Process Version 裡有節點使用的 Form（顯示資料與填表 Task 用）。 */
+  forms: z.array(formSchema),
+  /** 已經填寫的 Form 資料，依填寫順序。 */
+  data: z.array(requestDataSectionSchema),
   /** 依建立時間排序。 */
   tasks: z.array(requestTaskSchema),
   /** 依發生順序排序。 */
@@ -293,11 +335,16 @@ export const myTaskListSchema = z.array(myTaskSchema);
 
 export const myTasksQuerySchema = z.object({ status: taskStatusSchema.default('open') });
 
-/** `POST /api/tasks/:id/complete`：核准。version 是畫面上看到的 Task 版本（樂觀鎖）。 */
+/**
+ * `POST /api/tasks/:id/complete`：核准審批 Task（approved），或送出填表 Task 的 Form 資料（submitted）。
+ * version 是畫面上看到的 Task 版本（樂觀鎖）。outcome 要和 Task 的類型相符。
+ */
 export const completeTaskSchema = z.object({
-  outcome: z.literal('approved'),
+  outcome: z.enum(['approved', 'submitted']),
   version: z.number().int().positive(),
   comment: z.string().trim().max(2000).optional(),
+  /** 填表 Task 的 Form 資料。 */
+  data: formDataSchema.optional(),
 });
 export type CompleteTaskInput = z.input<typeof completeTaskSchema>;
 export type CompleteTaskCommand = z.output<typeof completeTaskSchema>;

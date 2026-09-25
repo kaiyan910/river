@@ -13,11 +13,12 @@ const dsl: ProcessDsl = {
     { id: 'e1', source: 'start', target: 'a' },
     { id: 'e2', source: 'a', target: 'end' },
   ],
+  forms: [{ id: 'trip', name: '出差申請單', fields: [] }],
 };
 
 describe('畫布與 DSL 的轉換', () => {
   it('轉成畫布再轉回來，得到同一份 DSL', () => {
-    expect(fromCanvas(toCanvas(dsl))).toEqual(dsl);
+    expect(fromCanvas(toCanvas(dsl), dsl.forms)).toEqual(dsl);
   });
 
   it('畫布節點帶著檢查器對它回報的錯誤', () => {

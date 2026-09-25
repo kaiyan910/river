@@ -2,17 +2,20 @@ import '@xyflow/react/dist/style.css';
 import type { MeResponse, Process, ProcessSummary, ProcessVersion } from '@river/contracts';
 import {
   type DslError,
+  formIdOf,
   NODE_TYPE_LABELS,
   type NodeSettings,
   type NodeType,
   type ProcessDsl,
 } from '@river/dsl';
+import type { FormSchema } from '@river/forms';
 import { useQuery } from '@tanstack/react-query';
 import { useBlocker } from '@tanstack/react-router';
 import { Background, Controls, ReactFlow, ReactFlowProvider, useReactFlow } from '@xyflow/react';
 import {
   CircleAlert,
   CircleCheck,
+  FileText,
   Lock,
   Plus,
   Save,
@@ -40,7 +43,9 @@ import {
   useSaveDraft,
 } from '@/lib/processes';
 import { cn } from '@/lib/utils';
+import { FormSheet, type FormSlot, newForm } from './form-designer';
 import {
+  CanvasFormsContext,
   NODE_HEIGHT,
   NODE_ICONS,
   NODE_WIDTH,
@@ -172,7 +177,8 @@ export function ProcessesPage({
             </div>
             <h2 className="font-semibold text-[1.3em]">選擇一個 Process</h2>
             <p className="max-w-[36em] text-muted-foreground">
-              在畫布上拖拉節點、連線，設定審批人；通過檢查後就可以發佈成新的 Process Version。
+              在畫布上拖拉節點、連線，設定審批人與填表人，設計開始表單與填表用的
+              Form；通過檢查後就可以發佈成新的 Process Version。
             </p>
           </div>
         )}
@@ -230,11 +236,13 @@ function ProcessEditorLoader({ id, me }: { id: string; me: MeResponse }) {
 /** 草稿；沒有草稿時從目前版本開始編輯。 */
 function workingDsl(process: Process): ProcessDsl {
   const current = process.versions.at(-1);
-  return process.draft?.dsl ?? current?.dsl ?? { nodes: [], edges: [] };
+  return process.draft?.dsl ?? current?.dsl ?? { nodes: [], edges: [], forms: [] };
 }
 
 function ProcessEditor({ process, me }: { process: Process; me: MeResponse }) {
   const [tab, setTab] = useState<'draft' | number>('draft');
+  /** 草稿分頁裡正在看的是流程畫布（null）還是某一份 Form。 */
+  const [formTab, setFormTab] = useState<string | null>(null);
   const base = useMemo(() => workingDsl(process), [process]);
   const canvas = useProcessCanvas(base);
   const dirty = !sameDsl(canvas.dsl, base);
@@ -273,6 +281,11 @@ function ProcessEditor({ process, me }: { process: Process; me: MeResponse }) {
   }
 
   function focus(error: DslError) {
+    if (error.formId) {
+      setFormTab(error.formId);
+      return;
+    }
+    setFormTab(null);
     const node = canvas.nodes.find((n) => n.id === error.nodeId);
     if (!node) return;
     canvas.select(node.id);
@@ -312,6 +325,20 @@ function ProcessEditor({ process, me }: { process: Process; me: MeResponse }) {
       : !hasDraft
         ? '目前版本之後沒有改動'
         : undefined;
+
+  const openForm = canvas.forms.find((f) => f.id === formTab);
+  const slots: FormSlot[] = canvas.nodes.flatMap((n) => {
+    const node = n.data.node;
+    return node.type === 'start' || node.type === 'form'
+      ? [{ id: n.id, type: node.type, name: node.name, formId: formIdOf(node) }]
+      : [];
+  });
+
+  function addForm() {
+    const form = newForm(canvas.forms);
+    canvas.setForms([...canvas.forms, form]);
+    setFormTab(form.id);
+  }
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -374,10 +401,67 @@ function ProcessEditor({ process, me }: { process: Process; me: MeResponse }) {
         )}
       </header>
 
+      {!viewing && (
+        <nav
+          aria-label="流程與 Form"
+          className="flex items-end gap-1 overflow-x-auto border-b bg-muted/40 px-3 pt-1.5"
+        >
+          <DocTab active={!openForm} onClick={() => setFormTab(null)}>
+            流程
+          </DocTab>
+          {canvas.forms.map((f) => (
+            <DocTab
+              key={f.id}
+              active={openForm?.id === f.id}
+              error={canvas.errors.some((e) => e.formId === f.id)}
+              onClick={() => setFormTab(f.id)}
+            >
+              <FileText size={13} aria-hidden className="text-muted-foreground" />
+              {f.name || '（未命名）'}
+            </DocTab>
+          ))}
+          <button
+            type="button"
+            aria-label="新增 Form"
+            title="新增 Form"
+            onClick={addForm}
+            className="mb-1 grid size-7 shrink-0 cursor-pointer place-items-center rounded-md text-muted-foreground hover:bg-muted"
+          >
+            <Plus size={15} />
+          </button>
+        </nav>
+      )}
+
       {viewing ? (
         <VersionView key={viewing.version} version={viewing} />
-      ) : (
+      ) : openForm ? (
         <>
+          <FormSheet
+            key={openForm.id}
+            form={openForm}
+            forms={canvas.forms}
+            slots={slots}
+            errors={canvas.errors.filter((e) => e.formId === openForm.id)}
+            onChange={(next) =>
+              canvas.setForms(canvas.forms.map((f) => (f.id === next.id ? next : f)))
+            }
+            onAssign={(nodeId, formId) => canvas.updateNode(nodeId, { formId })}
+            onDelete={() => {
+              canvas.setForms(canvas.forms.filter((f) => f.id !== openForm.id));
+              for (const slot of slots)
+                if (slot.formId === openForm.id) canvas.updateNode(slot.id, { formId: null });
+              setFormTab(null);
+            }}
+          />
+          <Problems
+            errors={canvas.errors}
+            open={problemsOpen}
+            onToggle={() => setProblemsOpen((v) => !v)}
+            onPick={focus}
+          />
+        </>
+      ) : (
+        <CanvasFormsContext.Provider value={canvas.forms}>
           <div ref={canvasRef} className="relative min-h-0 flex-1">
             <ReactFlow
               nodes={canvas.nodes}
@@ -404,9 +488,17 @@ function ProcessEditor({ process, me }: { process: Process; me: MeResponse }) {
               <Inspector
                 key={canvas.selected.id}
                 node={canvas.selected}
+                forms={canvas.forms}
                 onChange={(patch) =>
                   canvas.selected && canvas.updateNode(canvas.selected.id, patch)
                 }
+                onOpenForm={setFormTab}
+                onNewForm={() => {
+                  const form = newForm(canvas.forms);
+                  canvas.setForms([...canvas.forms, form]);
+                  if (canvas.selected) canvas.updateNode(canvas.selected.id, { formId: form.id });
+                  setFormTab(form.id);
+                }}
                 onRemove={() => canvas.selected && canvas.removeNode(canvas.selected.id)}
                 onClose={() => canvas.select(null)}
               />
@@ -418,7 +510,7 @@ function ProcessEditor({ process, me }: { process: Process; me: MeResponse }) {
             onToggle={() => setProblemsOpen((v) => !v)}
             onPick={focus}
           />
-        </>
+        </CanvasFormsContext.Provider>
       )}
 
       {publishing && (
@@ -431,6 +523,40 @@ function ProcessEditor({ process, me }: { process: Process; me: MeResponse }) {
         />
       )}
     </div>
+  );
+}
+
+function DocTab({
+  active,
+  error,
+  onClick,
+  children,
+}: {
+  active: boolean;
+  error?: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-current={active || undefined}
+      className={cn(
+        '-mb-px flex shrink-0 cursor-pointer items-center gap-1.5 rounded-t-lg border border-transparent px-3 py-1.5 text-[0.92em]',
+        active
+          ? 'border-border border-b-card bg-card font-medium'
+          : 'text-muted-foreground hover:text-foreground',
+      )}
+    >
+      {children}
+      {error && (
+        <>
+          <span aria-hidden className="size-1.5 rounded-full bg-destructive" />
+          <span className="sr-only">（有問題）</span>
+        </>
+      )}
+    </button>
   );
 }
 
@@ -496,7 +622,8 @@ function ProcessName({ process }: { process: Process }) {
 }
 
 const PALETTE: { type: NodeType; hint: string }[] = [
-  { type: 'start', hint: '流程從這裡開始' },
+  { type: 'start', hint: '流程從這裡開始，可以指定開始表單' },
+  { type: 'form', hint: '指派一位 Participant 填一份 Form' },
   { type: 'approval', hint: '指派一位 Participant 審批' },
   { type: 'end', hint: '流程結束' },
 ];
@@ -532,14 +659,20 @@ function Palette({ onAdd }: { onAdd: (type: NodeType) => void }) {
 
 function Inspector({
   node,
+  forms,
   onChange,
   onRemove,
   onClose,
+  onOpenForm,
+  onNewForm,
 }: {
   node: RFNode;
+  forms: FormSchema[];
   onChange: (patch: Partial<NodeSettings>) => void;
   onRemove: () => void;
   onClose: () => void;
+  onOpenForm: (formId: string) => void;
+  onNewForm: () => void;
 }) {
   const settings = node.data.node;
   return (
@@ -565,13 +698,57 @@ function Inspector({
           onChange={(e) => onChange({ name: e.target.value })}
         />
       </div>
-      {settings.type === 'approval' && (
+      {(settings.type === 'approval' || settings.type === 'form') && (
         <AssigneeField
+          label={
+            settings.type === 'form' ? '填表人（特定 Participant）' : '審批人（特定 Participant）'
+          }
           participantId={settings.assignee?.participantId ?? null}
           onChange={(participantId) =>
             onChange({ assignee: participantId ? { type: 'participant', participantId } : null })
           }
         />
+      )}
+      {(settings.type === 'start' || settings.type === 'form') && (
+        <div className="grid gap-1.5">
+          <Label htmlFor="node-form" className="font-normal text-[0.85em] text-muted-foreground">
+            {settings.type === 'start' ? '開始表單' : '要填的 Form'}
+          </Label>
+          <select
+            id="node-form"
+            value={settings.formId ?? ''}
+            aria-invalid={(settings.type === 'form' && !settings.formId) || undefined}
+            onChange={(e) => onChange({ formId: e.target.value || null })}
+            className="h-[2.5em] w-full rounded-lg border border-input bg-card px-2 aria-invalid:border-destructive"
+          >
+            <option value="">
+              {settings.type === 'start' ? '不需要表單（只填標題）' : '選擇 Form…'}
+            </option>
+            {forms.map((f) => (
+              <option key={f.id} value={f.id}>
+                {f.name || '（未命名）'}（{f.fields.length} 個欄位）
+              </option>
+            ))}
+          </select>
+          <div className="flex flex-wrap gap-x-3 text-[0.88em]">
+            {settings.formId && forms.some((f) => f.id === settings.formId) && (
+              <button
+                type="button"
+                className="cursor-pointer text-primary hover:underline"
+                onClick={() => settings.formId && onOpenForm(settings.formId)}
+              >
+                打開這份 Form 的分頁 →
+              </button>
+            )}
+            <button
+              type="button"
+              className="cursor-pointer text-primary hover:underline"
+              onClick={onNewForm}
+            >
+              ＋ 建立新 Form
+            </button>
+          </div>
+        </div>
       )}
       {node.data.errors.length > 0 && (
         <ul className="grid gap-1.5">
@@ -601,9 +778,11 @@ function Inspector({
 }
 
 function AssigneeField({
+  label,
   participantId,
   onChange,
 }: {
+  label: string;
   participantId: string | null;
   onChange: (participantId: string | null) => void;
 }) {
@@ -611,14 +790,14 @@ function AssigneeField({
   const person = people.data?.find((p) => p.id === participantId);
   return (
     <div className="grid gap-1.5">
-      <span className="text-[0.85em] text-muted-foreground">審批人（特定 Participant）</span>
+      <span className="text-[0.85em] text-muted-foreground">{label}</span>
       {participantId ? (
         <div className="flex items-center gap-2 rounded-lg border px-2 py-1.5">
           {person && <Avatar id={person.id} name={person.name} size={24} />}
           <span className="grid min-w-0 flex-1">
             <span className="truncate">{person?.name ?? '…'}</span>
             <span className="truncate text-[0.8em] text-muted-foreground">
-              {person?.status === 'deactivated' ? '已停用，請更換審批人' : person?.email}
+              {person?.status === 'deactivated' ? '已停用，請更換' : person?.email}
             </span>
           </span>
           <Button size="sm" variant="ghost" onClick={() => onChange(null)}>
@@ -681,12 +860,14 @@ function ErrorList({ errors, onPick }: { errors: DslError[]; onPick?: (e: DslErr
         <li key={`${e.code}-${e.nodeId}-${i}`}>
           <button
             type="button"
-            disabled={!onPick || !e.nodeId}
+            disabled={!onPick || !(e.nodeId || e.formId)}
             onClick={() => onPick?.(e)}
             className="flex w-full items-center gap-3 px-4 py-1 text-left enabled:cursor-pointer enabled:hover:bg-muted"
           >
             <span className="w-44 shrink-0 text-destructive">{e.code}</span>
-            <span className="w-28 shrink-0 truncate text-muted-foreground">{e.nodeId ?? '—'}</span>
+            <span className="w-28 shrink-0 truncate text-muted-foreground">
+              {e.nodeId ?? e.formId ?? '—'}
+            </span>
             <span className="font-sans">{e.message}</span>
           </button>
         </li>
@@ -698,34 +879,37 @@ function ErrorList({ errors, onPick }: { errors: DslError[]; onPick?: (e: DslErr
 function VersionView({ version }: { version: ProcessVersion }) {
   const { nodes, edges } = useProcessCanvas(version.dsl);
   return (
-    <div className="relative min-h-0 flex-1">
-      <div className="-translate-x-1/2 absolute top-3 left-1/2 z-10 flex max-w-[90%] items-center gap-2 rounded-full border bg-card px-3 py-1.5 text-[0.88em] shadow-sm">
-        <Lock size={13} className="shrink-0" aria-hidden />
-        <span className="truncate">
-          Process Version {version.version} 不可修改 · {version.publishedBy.name} 發佈於{' '}
-          {formatTime(version.publishedAt)}
-          {version.note && <span className="text-muted-foreground"> · {version.note}</span>}
-        </span>
+    <CanvasFormsContext.Provider value={version.dsl.forms}>
+      <div className="relative min-h-0 flex-1">
+        <div className="-translate-x-1/2 absolute top-3 left-1/2 z-10 flex max-w-[90%] items-center gap-2 rounded-full border bg-card px-3 py-1.5 text-[0.88em] shadow-sm">
+          <Lock size={13} className="shrink-0" aria-hidden />
+          <span className="truncate">
+            Process Version {version.version} 不可修改 · {version.publishedBy.name} 發佈於{' '}
+            {formatTime(version.publishedAt)}
+            {version.note && <span className="text-muted-foreground"> · {version.note}</span>}
+          </span>
+        </div>
+        <ReactFlow
+          nodes={nodes}
+          edges={edges}
+          nodeTypes={nodeTypes}
+          nodesDraggable={false}
+          nodesConnectable={false}
+          elementsSelectable={false}
+          fitView
+          fitViewOptions={{ maxZoom: 1.1 }}
+        >
+          <Background gap={16} />
+        </ReactFlow>
       </div>
-      <ReactFlow
-        nodes={nodes}
-        edges={edges}
-        nodeTypes={nodeTypes}
-        nodesDraggable={false}
-        nodesConnectable={false}
-        elementsSelectable={false}
-        fitView
-        fitViewOptions={{ maxZoom: 1.1 }}
-      >
-        <Background gap={16} />
-      </ReactFlow>
-    </div>
+    </CanvasFormsContext.Provider>
   );
 }
 
 function summary(dsl: ProcessDsl): string {
   const approvals = dsl.nodes.filter((n) => n.type === 'approval').length;
-  return `${dsl.nodes.length} 個節點、${approvals} 個審批、${dsl.edges.length} 條連線`;
+  const forms = dsl.nodes.filter((n) => n.type === 'form').length;
+  return `${dsl.nodes.length} 個節點、${approvals} 個審批、${forms} 個填表、${dsl.edges.length} 條連線、${dsl.forms.length} 份 Form`;
 }
 
 /** 有未儲存的變更時先儲存草稿，再發佈已儲存的草稿；API 拒絕時在對話框內列出錯誤。 */

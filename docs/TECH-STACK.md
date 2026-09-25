@@ -54,7 +54,7 @@ river/
 │  └─ worker/       # Temporal worker：interpreter workflow + activities
 ├─ packages/
 │  ├─ dsl/          # Process DSL 型別、Zod schema、發佈前檢查（web / api / worker 共用）
-│  ├─ forms/        # Form schema、Zod 產生器、渲染元件
+│  ├─ forms/        # Form schema、Zod 產生器、Form 檢查（不含 React；渲染元件在 apps/web）
 │  ├─ contracts/    # API request/response 的 Zod schema（web 與 api 共用）
 │  ├─ db/           # Drizzle schema、migrations、repository
 │  ├─ auth/         # Permission 清單、預設組合、授權檢查

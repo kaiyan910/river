@@ -1,4 +1,11 @@
-import { type Database, processVersions, requestEvents, requests, tasks } from '@river/db';
+import {
+  type Database,
+  processVersions,
+  requestEvents,
+  requests,
+  type TaskKind,
+  tasks,
+} from '@river/db';
 import type { ProcessDsl } from '@river/dsl';
 import { ApplicationFailure } from '@temporalio/activity';
 import { and, eq, sql } from 'drizzle-orm';
@@ -9,8 +16,12 @@ export interface CreateTaskInput {
   taskId: string;
   nodeId: string;
   nodeName: string;
+  kind: TaskKind;
   assigneeId: string;
 }
+
+/** interpreter 需要的流程圖；不含 Form schema，Temporal history 裡只有節點與連線。 */
+export type ProcessGraph = Omit<ProcessDsl, 'forms'>;
 
 /**
  * 每個 activity 都要能安全重試：寫入 Task 與 request_events 在同一個 transaction，
@@ -22,14 +33,14 @@ export function createActivities(db: Database) {
       await db.execute(sql`select 1`);
     },
 
-    /** Process Version 不可修改，DSL 只有流程圖，不含 Form 資料。 */
-    async loadProcessVersion(processVersionId: string): Promise<ProcessDsl> {
+    /** Process Version 不可修改。只回傳節點與連線：回傳值會寫進 Temporal history，Form 一律不進去。 */
+    async loadProcessVersion(processVersionId: string): Promise<ProcessGraph> {
       const [row] = await db
         .select({ dsl: processVersions.dsl })
         .from(processVersions)
         .where(eq(processVersions.id, processVersionId));
       if (!row) throw ApplicationFailure.nonRetryable(`找不到 Process Version ${processVersionId}`);
-      return row.dsl;
+      return { nodes: row.dsl.nodes, edges: row.dsl.edges };
     },
 
     async createTask(input: CreateTaskInput): Promise<void> {
@@ -41,6 +52,7 @@ export function createActivities(db: Database) {
             requestId: input.requestId,
             nodeId: input.nodeId,
             nodeName: input.nodeName,
+            kind: input.kind,
             assigneeId: input.assigneeId,
           })
           .onConflictDoNothing({ target: tasks.id })

@@ -1,15 +1,17 @@
-import type { RequestTask, TaskStatus } from '@river/contracts';
+import type { RequestDetail, RequestTask, TaskStatus } from '@river/contracts';
 import { useQuery } from '@tanstack/react-query';
 import { CheckCircle2, Inbox } from 'lucide-react';
 import { useRef, useState } from 'react';
+import { FormRunner } from '@/components/form-fields';
 import { Avatar } from '@/components/people';
 import { toast } from '@/components/toast';
 import { Button } from '@/components/ui/button';
 import {
+  formRejection,
   myTasksQueryOptions,
   requestNumber,
   requestQueryOptions,
-  useApproveTask,
+  useCompleteTask,
 } from '@/lib/requests';
 import { formatTime, timeAgo } from '@/lib/time';
 import { cn } from '@/lib/utils';
@@ -116,7 +118,7 @@ export function TasksPage({
           <EmptyDetail
             icon={Inbox}
             title="選擇一筆待辦"
-            text="Request 的內容、核准與歷程會顯示在這裡。"
+            text="Request 的內容、核准或填表，以及歷程會顯示在這裡。"
           />
         )}
       </section>
@@ -127,7 +129,7 @@ export function TasksPage({
 function TaskDetail({ taskId, requestId }: { taskId: string; requestId: string }) {
   const request = useQuery(requestQueryOptions(requestId));
   // 放在這一層：已由別人處理時畫面會切成「已處理」，錯誤訊息仍然要留著。
-  const approve = useApproveTask();
+  const complete = useCompleteTask();
   if (request.isPending) return <p className="px-6 py-8 text-muted-foreground">載入中…</p>;
   if (request.isError) return <p className="px-6 py-8 text-destructive">{request.error.message}</p>;
   const r = request.data;
@@ -139,13 +141,18 @@ function TaskDetail({ taskId, requestId }: { taskId: string; requestId: string }
       <RequestHeader request={r} />
       <RequestContent request={r} />
       {task.status === 'open' ? (
-        <ApprovePanel task={task} title={r.title} approve={approve} />
+        task.kind === 'form' ? (
+          <FormTaskPanel task={task} request={r} complete={complete} />
+        ) : (
+          <ApprovePanel task={task} title={r.title} complete={complete} />
+        )
       ) : (
         <section className="flex items-start gap-2 rounded-xl border bg-muted/60 p-4">
           <CheckCircle2 size={18} aria-hidden className="mt-0.5 shrink-0 text-status-approved" />
-          <span role={approve.isError ? 'alert' : undefined}>
-            {approve.isError && `${approve.error.message} `}
-            {task.completedBy?.name} 已於 {task.completedAt && formatTime(task.completedAt)} 核准
+          <span role={complete.isError ? 'alert' : undefined}>
+            {complete.isError && `${complete.error.message} `}
+            {task.completedBy?.name} 已於 {task.completedAt && formatTime(task.completedAt)}{' '}
+            {task.kind === 'form' ? '送出表單' : '核准'}
             {task.comment ? `：「${task.comment}」` : '。'}
           </span>
         </section>
@@ -160,25 +167,71 @@ function TaskDetail({ taskId, requestId }: { taskId: string; requestId: string }
   );
 }
 
+function YourTurn({ task }: { task: RequestTask }) {
+  return (
+    <h2 className="font-semibold">
+      輪到你：{task.nodeName}
+      <span className="ml-2 font-normal text-[0.86em] text-muted-foreground">
+        收到於 {timeAgo(task.createdAt)}
+      </span>
+    </h2>
+  );
+}
+
+/** 填表 Task：填這一步的 Form，驗證與 API 相同；送出後 Request 往下一步走。 */
+function FormTaskPanel({
+  task,
+  request,
+  complete,
+}: {
+  task: RequestTask;
+  request: RequestDetail;
+  complete: ReturnType<typeof useCompleteTask>;
+}) {
+  const formId = request.steps.find((s) => s.nodeId === task.nodeId)?.formId;
+  const form = request.forms.find((f) => f.id === formId) ?? null;
+  const rejected = formRejection(complete.error);
+  return (
+    <section className="grid gap-3 rounded-xl border-2 border-primary/40 bg-accent/40 p-4">
+      <YourTurn task={task} />
+      {form && <p className="text-[0.88em] text-muted-foreground">請填寫「{form.name}」。</p>}
+      <FormRunner
+        form={form}
+        submitLabel="送出"
+        pending={complete.isPending}
+        serverErrors={rejected?.errors}
+        error={
+          complete.isError && (
+            <p role="alert" className="rounded-lg bg-destructive/10 px-3 py-2 text-destructive">
+              {complete.error.message}
+            </p>
+          )
+        }
+        onSubmit={({ data }) =>
+          complete.mutate(
+            { id: task.id, version: task.version, outcome: 'submitted', data },
+            { onSuccess: () => toast(`已送出「${task.nodeName}」`) },
+          )
+        }
+      />
+    </section>
+  );
+}
+
 function ApprovePanel({
   task,
   title,
-  approve,
+  complete,
 }: {
   task: RequestTask;
   title: string;
-  approve: ReturnType<typeof useApproveTask>;
+  complete: ReturnType<typeof useCompleteTask>;
 }) {
   const [comment, setComment] = useState('');
 
   return (
     <section className="grid gap-3 rounded-xl border-2 border-primary/40 bg-accent/40 p-4">
-      <h2 className="font-semibold">
-        輪到你：{task.nodeName}
-        <span className="ml-2 font-normal text-[0.86em] text-muted-foreground">
-          收到於 {timeAgo(task.createdAt)}
-        </span>
-      </h2>
+      <YourTurn task={task} />
       <textarea
         value={comment}
         onChange={(e) => setComment(e.target.value)}
@@ -187,22 +240,22 @@ function ApprovePanel({
         placeholder="意見（選填），會顯示在時間軸上"
         className="min-h-[4.5em] w-full resize-y rounded-lg border border-input bg-card px-[0.8em] py-[0.55em] placeholder:text-muted-foreground/80 focus:border-ring focus:shadow-[0_0_0_3px_color-mix(in_oklch,var(--ring)_28%,transparent)] focus:outline-none"
       />
-      {approve.isError && (
+      {complete.isError && (
         <p role="alert" className="rounded-lg bg-destructive/10 px-3 py-2 text-destructive">
-          {approve.error.message}
+          {complete.error.message}
         </p>
       )}
       <div className="flex justify-end">
         <Button
-          disabled={approve.isPending}
+          disabled={complete.isPending}
           onClick={() =>
-            approve.mutate(
-              { id: task.id, version: task.version, comment },
+            complete.mutate(
+              { id: task.id, version: task.version, outcome: 'approved', comment },
               { onSuccess: () => toast(`已核准「${title}」`) },
             )
           }
         >
-          {approve.isPending ? '送出中…' : '核准'}
+          {complete.isPending ? '送出中…' : '核准'}
         </Button>
       </div>
     </section>
