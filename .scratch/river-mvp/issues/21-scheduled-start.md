@@ -23,3 +23,17 @@
 - 跳過並通知 Administrator（持有 `user.manage` 的人，新的「排程發起已跳過」信件）的情況：發起人已停用；開始表單有必填欄位（排程沒有人填表，以空白表單送出，決定跳過而不是略過驗證）。設定剛被刪除時靜默跳過。執行時不再檢查 Initiator Role（設定時已檢查）。
 - Seam ① 測試（`scheduled-start.test.ts`，6 個）：time skipping 的測試 server 不支援 Temporal Schedule，所以 harness 新增 `startTestApp({ temporal: 'local' })`，改用 Temporal CLI 的 dev server（第一次執行會下載 CLI）；「時間到了」以 `ScheduleHandle.trigger()` 觸發，並以 `describe()` 驗證 Schedule 的 cron、時區與輸入。
 - Web：Designer 標題列新增排程摘要按鈕與「排程發起」對話框（常用時間、cron 輸入與中文說明、發起人選擇、刪除排程；發起人已停用時標示）。
+
+**Review 修正（2026-09-26）**
+
+- 跳過的原因只以代碼（`initiator_deactivated`、`initiator_not_allowed`、`no_version`、`required_fields`）進入 Temporal history；發起人姓名、欄位名稱在寄信的 activity 裡才從 Postgres 讀取。Seam ① 測試檢查 history 的 payload 不含這些內容。
+- 時間到時除了檢查發起人沒有停用，也重新檢查他仍在 Initiator Role 裡；不在時一樣跳過並通知 Administrator。
+- Replay 樣本 `scheduled-start`、`scheduled-start-skipped`（產生器直接啟動 `scheduledStart` workflow，因為 time skipping 的 server 不支援 Schedule）。
+
+**Issue 沒有要求、由實作決定的事項（需要時請調整）**
+
+- 開始表單有必填欄位時跳過並通知 Administrator：排程沒有人填表，只能以空白表單送出；選擇跳過而不是略過驗證、建立缺資料的 Request。
+- cron 一律以 `Asia/Taipei` 解讀（和 Form 的日期同一個時區），畫面上沒有時區選項。
+- Temporal Schedule 的 overlap policy 是 `ALLOW_ALL`（每次時間到都是獨立的一筆 Request，不因上一次還在執行而跳過）；catchup window 是 1 天（Temporal 無法使用期間錯過的時間，恢復後一天內的會補發，更久的不補）。
+- 設定時 Temporal 成功、Postgres transaction 沒有提交時，會留下沒有設定的 Temporal Schedule；時間到時 worker 讀不到設定而靜默跳過，下一次設定會沿用它。
+

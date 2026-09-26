@@ -1,11 +1,9 @@
 import { PERMISSION_PRESETS, type Permission } from '@river/auth';
 import type { MyTask, Process, RequestDetail, RequestSummary } from '@river/contracts';
 import { SCHEDULED_START_WORKFLOW, scheduleIdOf } from '@river/contracts/workflow';
-import { requests } from '@river/db';
 import type { ProcessDsl } from '@river/dsl';
 import type { FormSchema } from '@river/forms';
 import { ScheduleNotFoundError } from '@temporalio/client';
-import { eq } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { type ApiClient, startTestApp, type TestApp } from './harness.js';
 
@@ -116,6 +114,42 @@ describe('排程發起', () => {
     const res = await as.get('/api/tasks/mine?status=open');
     expect(res.status).toBe(200);
     return (await res.json()) as MyTask[];
+  }
+
+  /** Administrator（request.view_all）看得到的所有 Request 中屬於這個 Process 的。 */
+  async function allRequestsOf(processName: string): Promise<RequestSummary[]> {
+    const res = await admin.get('/api/requests');
+    expect(res.status).toBe(200);
+    return ((await res.json()) as RequestSummary[]).filter((r) => r.process.name === processName);
+  }
+
+  /** 跳過時寄給 Administrator 的信。 */
+  function skippedMail(before: number) {
+    return eventually(
+      async () => app.emails.sent.slice(before).find((m) => m.to === 'admin@river.test'),
+      (m) => m !== undefined,
+    );
+  }
+
+  /**
+   * 這個 Process 的排程最近一次啟動的 scheduledStart workflow 的 history，payload 解碼成文字：
+   * 用來確認發起人姓名、Form 欄位等內容沒有進入 Temporal history（TECH-STACK 約束 1）。
+   */
+  async function lastRunHistory(processId: string): Promise<string> {
+    const handle = app.temporal.schedule.getHandle(scheduleIdOf(processId));
+    const { info } = await eventually(
+      () => handle.describe(),
+      (d) => d.info.recentActions.length > 0,
+    );
+    const last = info.recentActions.at(-1);
+    if (last?.action.type !== 'startWorkflow') throw new Error('Schedule 沒有啟動 workflow');
+    const workflow = app.temporal.workflow.getHandle(last.action.workflow.workflowId);
+    await workflow.result();
+    const history = await workflow.fetchHistory();
+    // payload 的 data 是 base64 字串。
+    return JSON.stringify(history, (key, v) =>
+      key === 'data' && typeof v === 'string' ? Buffer.from(v, 'base64').toString('utf8') : v,
+    );
   }
 
   async function requestsOf(processName: string) {
@@ -305,19 +339,41 @@ describe('排程發起', () => {
     });
 
     await fire(id);
-    const mail = await eventually(
-      async () => app.emails.sent.slice(before).find((m) => m.to === 'admin@river.test'),
-      (m) => m !== undefined,
-    );
+    const mail = await skippedMail(before);
     expect(mail?.subject).toContain('每週巡檢');
     expect(mail?.text).toContain('張家豪');
     expect(mail?.text).toContain('已停用');
+    expect(await allRequestsOf('每週巡檢')).toEqual([]);
+    // 原因只以代碼進入 history，發起人的姓名在寄信時才從 Postgres 讀取。
+    expect(await lastRunHistory(id)).not.toContain('張家豪');
+  });
 
-    const created = await app.db
-      .select({ id: requests.id })
-      .from(requests)
-      .where(eq(requests.initiatorId, leaving.participantId));
-    expect(created).toEqual([]);
+  it('發起人已經不在 Initiator Role 裡時跳過這次發起，並通知 Administrator', async () => {
+    const id = await published('限定發起的月報', oneApproval(approverId, '審批'));
+    const role = (await (await admin.post('/api/roles', { name: '稽核' })).json()) as {
+      id: string;
+    };
+    expect((await admin.put(`/api/roles/${role.id}/members/${initiatorId}`)).status).toBe(204);
+    expect(
+      (
+        await designer.put(`/api/processes/${id}/access`, {
+          initiatorRoleIds: [role.id],
+          observerRoleIds: [],
+        })
+      ).status,
+    ).toBe(200);
+    expect((await setSchedule(id, { cron: '0 9 1 * *', initiatorId })).status).toBe(200);
+    // 設定之後才被移出 Initiator Role。
+    expect((await admin.delete(`/api/roles/${role.id}/members/${initiatorId}`)).status).toBe(204);
+    const before = app.emails.sent.length;
+
+    await fire(id);
+    const mail = await skippedMail(before);
+    expect(mail?.subject).toContain('限定發起的月報');
+    expect(mail?.text).toContain('王小明');
+    expect(mail?.text).toContain('Initiator Role');
+    expect(await allRequestsOf('限定發起的月報')).toEqual([]);
+    expect(await lastRunHistory(id)).not.toContain('王小明');
   });
 
   it('開始表單有必填欄位時無法以空白表單發起：跳過並通知 Administrator', async () => {
@@ -331,12 +387,11 @@ describe('排程發起', () => {
     const before = app.emails.sent.length;
 
     await fire(id);
-    const mail = await eventually(
-      async () => app.emails.sent.slice(before).find((m) => m.to === 'admin@river.test'),
-      (m) => m !== undefined,
-    );
+    const mail = await skippedMail(before);
     expect(mail?.subject).toContain('需要填表');
     expect(mail?.text).toContain('必填');
-    expect(await requestsOf('需要填表')).toEqual([]);
+    expect(mail?.text).toContain('金額');
+    expect(await allRequestsOf('需要填表')).toEqual([]);
+    expect(await lastRunHistory(id)).not.toContain('金額');
   });
 });

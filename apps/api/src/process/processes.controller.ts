@@ -149,7 +149,7 @@ export class ProcessesController {
     @Body() body: SetProcessScheduleDto,
     @CurrentParticipant() me: ActiveParticipant,
   ): Promise<ProcessDto> {
-    await this.schedules.set(id, body, me);
+    await this.schedules.set(id, body, me.id);
     return this.processes.get(id);
   }
 

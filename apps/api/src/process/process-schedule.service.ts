@@ -23,13 +23,16 @@ import {
   type ScheduleSpec,
 } from '@temporalio/client';
 import { eq } from 'drizzle-orm';
-import type { ActiveParticipant } from '../auth/active-participant.js';
 import { DATABASE, TEMPORAL_CLIENT, TEMPORAL_TASK_QUEUE } from '../tokens.js';
 import { canStart, currentVersions } from './processes.service.js';
 
 /**
  * 排程發起的設定：Postgres 裡的 process_schedules 與 Temporal Schedule 一起建立、更新、刪除。
  * 在同一個 transaction 裡先鎖住 Process、寫入設定，再呼叫 Temporal；Temporal 失敗時設定跟著 rollback。
+ * 反過來 Temporal 成功、transaction 提交失敗時兩邊會不一致：
+ * - 設定失敗：留下沒有對應設定的 Temporal Schedule，時間到時 worker 讀不到設定，靜默跳過（reason 為 null）；
+ *   下一次設定會沿用（更新）這個 Schedule。
+ * - 刪除失敗：設定還在、Temporal Schedule 已刪除；再設定一次就會重新建立。
  * Temporal Schedule 的輸入只有 Process ID，發起人在時間到時才從 Postgres 讀取。
  */
 @Injectable()
@@ -44,14 +47,9 @@ export class ProcessScheduleService {
    * 設定或修改排程。還沒發佈的 Process 沒有版本可以發起（409）；
    * 發起人必須是有效的 Participant，而且可以發起這個 Process（Initiator Role），否則 422。
    */
-  async set(processId: string, input: SetProcessScheduleInput, me: ActiveParticipant) {
+  async set(processId: string, input: SetProcessScheduleInput, updatedBy: string) {
     await this.db.transaction(async (tx) => {
-      const [process] = await tx
-        .select({ id: processes.id })
-        .from(processes)
-        .where(eq(processes.id, processId))
-        .for('update');
-      if (!process) throw new NotFoundException('找不到這個 Process');
+      await lockProcess(tx, processId);
       if ((await currentVersions(tx, processId)).length === 0)
         throw new ConflictException('還沒發佈過的 Process 不能設定排程');
 
@@ -68,7 +66,7 @@ export class ProcessScheduleService {
         cron: input.cron,
         timezone: SCHEDULE_TIME_ZONE,
         initiatorId: input.initiatorId,
-        updatedBy: me.id,
+        updatedBy,
         updatedAt: new Date(),
       };
       await tx
@@ -82,12 +80,7 @@ export class ProcessScheduleService {
   /** 刪除排程；沒有排程時什麼都不做。 */
   async remove(processId: string): Promise<void> {
     await this.db.transaction(async (tx) => {
-      const [process] = await tx
-        .select({ id: processes.id })
-        .from(processes)
-        .where(eq(processes.id, processId))
-        .for('update');
-      if (!process) throw new NotFoundException('找不到這個 Process');
+      await lockProcess(tx, processId);
       await tx.delete(processSchedules).where(eq(processSchedules.processId, processId));
       try {
         await this.temporal.schedule.getHandle(scheduleIdOf(processId)).delete();
@@ -135,6 +128,16 @@ export class ProcessScheduleService {
       throw error;
     }
   }
+}
+
+/** 鎖住 Process，序列化同一個 Process 的排程設定；不存在時回 404。 */
+async function lockProcess(tx: Pick<Database, 'select'>, processId: string): Promise<void> {
+  const [process] = await tx
+    .select({ id: processes.id })
+    .from(processes)
+    .where(eq(processes.id, processId))
+    .for('update');
+  if (!process) throw new NotFoundException('找不到這個 Process');
 }
 
 /** gRPC 的 INVALID_ARGUMENT。 */

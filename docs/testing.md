@@ -18,6 +18,8 @@
 | `return-resubmit.json`、`return-resubmit.run2.json` | Return → 重新送出（continueAsNew，所以有兩個 run）→ 核准 → 完成 |
 | `parallel.json` | 並行分支的兩條分支各自審批，匯合後再審批 → 完成 |
 | `escalation.json` | Reminder → 逾時 Escalation 給處理人的 Manager → 核准 → 完成 |
+| `scheduled-start.json` | 排程發起（`scheduledStart` workflow）：建立 Request → 以 child workflow 啟動 interpreter。time skipping 的 server 不支援 Schedule，產生器直接啟動這個 workflow |
+| `scheduled-start-skipped.json` | 排程發起：開始表單有必填欄位 → 跳過並通知 Administrator（history 裡只有原因代碼） |
 
 ### 新增或更新樣本
 

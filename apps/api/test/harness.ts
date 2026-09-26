@@ -19,7 +19,7 @@ import {
 
 /** 測試裡瀏覽器所在的 origin；Better Auth 只信任這個 origin 送來的請求。 */
 const ORIGIN = 'http://river.test';
-const TASK_QUEUE = 'river-test';
+export const TASK_QUEUE = 'river-test';
 
 // 測試輸出只保留 Temporal 的錯誤。每個測試檔跑在自己的 process，這裡只會執行一次。
 Runtime.install({

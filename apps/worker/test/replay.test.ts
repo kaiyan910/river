@@ -17,7 +17,14 @@ import { workflowOptions } from '../src/worker.js';
 const HISTORIES = new URL('./histories/', import.meta.url);
 
 /** 規格要求至少涵蓋的情境（Seam ③）；每一個都必須有樣本，刪掉樣本時測試會失敗。 */
-const REQUIRED = ['approval', 'return-resubmit', 'parallel', 'escalation'];
+const REQUIRED = [
+  'approval',
+  'return-resubmit',
+  'parallel',
+  'escalation',
+  'scheduled-start',
+  'scheduled-start-skipped',
+];
 
 Runtime.install({
   logger: new DefaultLogger('ERROR'),
@@ -45,7 +52,7 @@ describe('Replay：保存的 workflow history', () => {
       results.set(result.workflowId, result);
   });
 
-  it('涵蓋一般核准、Return 後重新送出、並行分支與 Escalation', () => {
+  it('涵蓋一般核准、Return 後重新送出、並行分支、Escalation 與排程發起', () => {
     const names = histories.map((h) => h.workflowId);
     for (const name of REQUIRED) expect(names).toContain(name);
     // Return 後重新送出會 continueAsNew，第二個 run 也要重播。

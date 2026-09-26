@@ -14,11 +14,17 @@ import { existsSync } from 'node:fs';
 import { mkdir, writeFile } from 'node:fs/promises';
 import type { Permission } from '@river/auth';
 import type { MyTask, Process, RequestDetail } from '@river/contracts';
+import {
+  SCHEDULE_TIME_ZONE,
+  SCHEDULED_START_WORKFLOW,
+  type ScheduledStartInput,
+} from '@river/contracts/workflow';
+import { processSchedules } from '@river/db';
 import type { Assignee, ProcessDsl, ProcessNode } from '@river/dsl';
 import type { FormSchema } from '@river/forms';
 import { historyToJSON } from '@temporalio/common/lib/proto-utils.js';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { type ApiClient, startTestApp, type TestApp } from './harness.js';
+import { type ApiClient, startTestApp, TASK_QUEUE, type TestApp } from './harness.js';
 
 const RECORD = process.env.RECORD_REPLAY_HISTORIES === '1';
 const OUT_DIR = new URL('../../worker/test/histories/', import.meta.url);
@@ -327,6 +333,68 @@ describe.runIf(RECORD)('產生 replay 用的 history 樣本', () => {
     await waitForStatus(id, 'completed');
     return id;
   });
+
+  /**
+   * 排程發起：time skipping 的測試 server 不支援 Temporal Schedule，所以直接寫入排程設定、
+   * 直接啟動 Schedule 會啟動的 scheduledStart workflow（輸入相同），history 與時間到時的一樣。
+   */
+  async function runScheduledStart(processId: string): Promise<string> {
+    await app.db.insert(processSchedules).values({
+      processId,
+      cron: '0 9 1 * *',
+      timezone: SCHEDULE_TIME_ZONE,
+      initiatorId: who('employee').id,
+      updatedBy: who('designer').id,
+    });
+    const args: [ScheduledStartInput] = [{ processId }];
+    const handle = await app.temporal.workflow.start(SCHEDULED_START_WORKFLOW, {
+      taskQueue: TASK_QUEUE,
+      workflowId: `scheduled-start-${processId}`,
+      args,
+    });
+    await handle.result();
+    return handle.workflowId;
+  }
+
+  record(
+    'scheduled-start',
+    '排程時間到 → 建立 Request → 以 child workflow 啟動 interpreter',
+    async () => {
+      const processId = await publish(
+        '每月盤點',
+        chain([
+          approval('manager', '主管審批', {
+            type: 'participant',
+            participantId: who('manager').id,
+          }),
+        ]),
+      );
+      return runScheduledStart(processId);
+    },
+  );
+
+  record(
+    'scheduled-start-skipped',
+    '排程時間到，開始表單有必填欄位 → 跳過並通知 Administrator',
+    async () => {
+      const processId = await publish(
+        '每月報銷',
+        chain(
+          [
+            approval('manager', '主管審批', {
+              type: 'participant',
+              participantId: who('manager').id,
+            }),
+          ],
+          [expense],
+        ),
+      );
+      const before = app.emails.sent.length;
+      const workflowId = await runScheduledStart(processId);
+      expect(app.emails.sent.length).toBeGreaterThan(before);
+      return workflowId;
+    },
+  );
 });
 
 /**
