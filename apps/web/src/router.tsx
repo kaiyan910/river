@@ -1,3 +1,4 @@
+import { usablePermissions } from '@river/auth';
 import type { QueryClient } from '@tanstack/react-query';
 import {
   createRootRouteWithContext,
@@ -11,6 +12,7 @@ import { z } from 'zod';
 import { Toaster } from '@/components/toast';
 import { meQueryOptions } from '@/lib/me';
 import {
+  ACCOUNT_SECURITY_PATH,
   CREDENTIALS,
   canAccess,
   type NavItem,
@@ -21,6 +23,7 @@ import {
   ROLES,
   SERVICE_ACCOUNTS,
 } from '@/navigation';
+import { AccountSecurityPage } from '@/routes/account-security';
 import { CredentialsPage } from '@/routes/admin/credentials';
 import { ParticipantsPage } from '@/routes/admin/participants';
 import { ReassignPage } from '@/routes/admin/reassign';
@@ -28,7 +31,8 @@ import { RolesPage } from '@/routes/admin/roles';
 import { ServiceAccountsPage } from '@/routes/admin/service-accounts';
 import { AppShell } from '@/routes/app-shell';
 import { ProcessesPage } from '@/routes/designer/processes';
-import { ForbiddenPage } from '@/routes/forbidden';
+import { ForbiddenPage, TotpRequiredPage } from '@/routes/forbidden';
+import { ForgotPasswordPage } from '@/routes/forgot-password';
 import { HomePage } from '@/routes/home';
 import { InvitePage } from '@/routes/invite';
 import { LoginPage } from '@/routes/login';
@@ -36,6 +40,7 @@ import { PlaceholderPage } from '@/routes/placeholder';
 import { RequestsPage } from '@/routes/portal/requests';
 import { StartPage } from '@/routes/portal/start';
 import { TasksPage } from '@/routes/portal/tasks';
+import { ResetPasswordPage } from '@/routes/reset-password';
 
 const rootRoute = createRootRouteWithContext<{ queryClient: QueryClient }>()({
   component: () => (
@@ -75,6 +80,23 @@ const inviteRoute = createRoute({
   },
 });
 
+/** 忘記密碼：寄出重設密碼信；不需要登入。 */
+const forgotPasswordRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/forgot-password',
+  component: ForgotPasswordPage,
+});
+
+/** 重設密碼信連結的落地頁；不需要登入。 */
+const resetPasswordRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/reset-password/$token',
+  component: function ResetPassword() {
+    const { token } = resetPasswordRoute.useParams();
+    return <ResetPasswordPage token={token} />;
+  },
+});
+
 /** 需要登入的區域；未登入時導到登入頁，登入後回到原本的頁面。 */
 const authenticatedRoute = createRoute({
   getParentRoute: () => rootRoute,
@@ -96,11 +118,25 @@ const homeRoute = createRoute({
   component: HomePage,
 });
 
-/** 沒有 item.requires 的 Permission 時顯示「沒有權限」；導覽列本來就不會出現這些項目。 */
+/**
+ * 沒有 item.requires 的 Permission 時顯示「沒有權限」；導覽列本來就不會出現這些項目。
+ * 持有、但那是需要 TOTP 的 Permission 而還沒啟用時，引導去設定兩步驟驗證。
+ */
 function Guarded({ item, children }: { item: NavItem; children: ReactNode }) {
   const { me } = authenticatedRoute.useRouteContext();
-  return canAccess(item, me.permissions) ? children : <ForbiddenPage item={item} />;
+  if (canAccess(item, usablePermissions(me.permissions, me.twoFactorEnabled))) return children;
+  if (canAccess(item, me.permissions)) return <TotpRequiredPage item={item} />;
+  return <ForbiddenPage item={item} />;
 }
+
+const accountSecurityRoute = createRoute({
+  getParentRoute: () => authenticatedRoute,
+  path: ACCOUNT_SECURITY_PATH,
+  component: function AccountSecurity() {
+    const { me } = authenticatedRoute.useRouteContext();
+    return <AccountSecurityPage me={me} />;
+  },
+});
 
 /** 目前選取的項目放在網址上，重新整理或分享連結時保持一致。 */
 const selectionSearch = z.object({ id: z.string().optional() });
@@ -284,8 +320,11 @@ const placeholderRoutes = PLACEHOLDER_ITEMS.map((item) =>
 const routeTree = rootRoute.addChildren([
   loginRoute,
   inviteRoute,
+  forgotPasswordRoute,
+  resetPasswordRoute,
   authenticatedRoute.addChildren([
     homeRoute,
+    accountSecurityRoute,
     participantsRoute,
     rolesRoute,
     reassignRoute,

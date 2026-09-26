@@ -19,7 +19,7 @@ _Avoid_: Bot, integration user, API user
 _Avoid_: Group, team, position, 平台角色
 
 **Permission**:
-程式碼中固定的一項平台操作權限（例如發佈 Process、管理 Credential），直接授予 Participant。
+程式碼中固定的一項平台操作權限（例如發佈 Process、管理 Credential），直接授予 Participant。每次呼叫 API 都重新讀取，撤銷後立即生效。其中發佈 Process、管理人員、管理 Credential 是**需要 TOTP 的 Permission**：持有的人啟用 TOTP（兩步驟驗證）之前無法使用。
 _Avoid_: Role, privilege, scope
 
 **Designer**:

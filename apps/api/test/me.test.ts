@@ -27,6 +27,8 @@ describe('取得自己的資料', () => {
       name: '王小明',
       email: 'admin@river.test',
       permissions: [...PERMISSION_PRESETS.administrator].sort(),
+      // 持有 user.manage，harness 已替他啟用 TOTP。
+      twoFactorEnabled: true,
     });
   });
 

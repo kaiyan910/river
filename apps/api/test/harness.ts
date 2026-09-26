@@ -1,5 +1,6 @@
-import { randomBytes, randomUUID } from 'node:crypto';
+import { createHmac, randomBytes, randomUUID } from 'node:crypto';
 import type { INestApplication } from '@nestjs/common';
+import { requiresTotp } from '@river/auth';
 import { connectDatabase, createCredentialCipher, type Database, migrateDatabase } from '@river/db';
 import { RecordingEmailSender } from '@river/email';
 import { createWorker } from '@river/worker';
@@ -35,6 +36,21 @@ export class ApiClient {
     /** Service Account 的 API key；外部 API 以 `Authorization: Bearer <key>` 驗證。 */
     private readonly apiKey?: string,
   ) {}
+
+  /**
+   * 換成回應裡新設定的 cookie：優先取 session cookie，沒有時取 TOTP 登入挑戰的 cookie。
+   * Better Auth 在啟用、停用 TOTP 或完成 TOTP 驗證時會換發 session，舊的 session 隨即失效。
+   */
+  withSetCookie(res: Response): ApiClient {
+    const cookies = res.headers
+      .getSetCookie()
+      .filter((c) => !/^[^=]+=;/.test(c) && !/Max-Age=0/i.test(c));
+    const cookie =
+      cookies.find((c) => c.includes('session_token=')) ??
+      cookies.find((c) => c.includes('two_factor='));
+    if (!cookie) throw new Error(`回應沒有設定 cookie：${res.status}`);
+    return new ApiClient(this.baseUrl, cookie);
+  }
 
   /** 以 Service Account 的 API key 呼叫的 client（不帶 session cookie）。 */
   withApiKey(apiKey: string): ApiClient {
@@ -83,9 +99,23 @@ export interface TestApp {
   temporal: Client;
   /** 快轉 Temporal 的時間（time skipping），讓 Reminder、Escalation 等 durable timer 到期。 */
   skipTime(duration: Parameters<TestWorkflowEnvironment['sleep']>[0]): Promise<void>;
-  provisionParticipant(input: ProvisionParticipantInput): Promise<{ participantId: string }>;
-  /** 用 email + 密碼登入，回傳帶著 session cookie 的 client；失敗時丟出錯誤。 */
+  /**
+   * 建立可以直接登入的 Participant。持有需要 TOTP 的 Permission 時預設會一併啟用 TOTP
+   * （模擬已經完成設定的人）；`totp: false` 可以跳過，`totp: true` 可以替任何人啟用。
+   */
+  provisionParticipant(
+    input: ProvisionParticipantInput & { totp?: boolean },
+  ): Promise<{ participantId: string }>;
+  /**
+   * 用 email + 密碼登入，回傳帶著 session cookie 的 client；失敗時丟出錯誤。
+   * 已經透過 harness 啟用 TOTP 的帳號，會自動用驗證器算出的驗證碼通過登入挑戰。
+   */
   signIn(email: string, password: string): Promise<ApiClient>;
+  /** 走 Better Auth 的流程替已登入的人啟用 TOTP；回傳換發 session 後的 client，之後 signIn 會自動通過挑戰。 */
+  enableTotp(
+    client: ApiClient,
+    password: string,
+  ): Promise<{ client: ApiClient; totpURI: string; backupCodes: string[] }>;
   close(): Promise<void>;
 }
 
@@ -132,6 +162,7 @@ export async function startTestApp(options: TestAppOptions = {}): Promise<TestAp
   const auth = createAuth(database.db, {
     secret: 'test-secret-that-is-at-least-32-characters',
     baseURL: ORIGIN,
+    emailSender: emails,
   });
   const app: INestApplication = await createApp({
     db: database.db,
@@ -147,6 +178,39 @@ export async function startTestApp(options: TestAppOptions = {}): Promise<TestAp
   await app.listen(0, '127.0.0.1');
   const baseUrl = await app.getUrl();
   const anonymous = new ApiClient(baseUrl);
+  /** 啟用過 TOTP 的帳號（email → otpauth URI），相當於每個人手機上的驗證器 app。 */
+  const authenticators = new Map<string, string>();
+
+  async function signIn(email: string, password: string): Promise<ApiClient> {
+    const res = await anonymous.post('/api/auth/sign-in/email', { email, password });
+    if (!res.ok) throw new Error(`登入失敗：${res.status} ${await res.text()}`);
+    const body = (await res.clone().json()) as { twoFactorRedirect?: boolean };
+    if (!body.twoFactorRedirect) return anonymous.withSetCookie(res);
+
+    const totpURI = authenticators.get(email.toLowerCase());
+    if (!totpURI) throw new Error(`${email} 已啟用 TOTP，但 harness 沒有他的驗證器`);
+    const verify = await anonymous
+      .withSetCookie(res)
+      .post('/api/auth/two-factor/verify-totp', { code: totpCode(totpURI) });
+    if (!verify.ok) throw new Error(`TOTP 驗證失敗：${verify.status} ${await verify.text()}`);
+    return anonymous.withSetCookie(verify);
+  }
+
+  async function enableTotp(client: ApiClient, password: string) {
+    const enable = await client.post('/api/auth/two-factor/enable', { password });
+    if (!enable.ok) throw new Error(`啟用 TOTP 失敗：${enable.status} ${await enable.text()}`);
+    const { totpURI, backupCodes } = (await enable.json()) as {
+      totpURI: string;
+      backupCodes: string[];
+    };
+    const verify = await client.post('/api/auth/two-factor/verify-totp', {
+      code: totpCode(totpURI),
+    });
+    if (!verify.ok) throw new Error(`確認 TOTP 失敗：${verify.status} ${await verify.text()}`);
+    const account = decodeURIComponent(new URL(totpURI).pathname.split(':').at(-1) ?? '');
+    authenticators.set(account.toLowerCase(), totpURI);
+    return { client: client.withSetCookie(verify), totpURI, backupCodes };
+  }
 
   return {
     db: database.db,
@@ -154,14 +218,15 @@ export async function startTestApp(options: TestAppOptions = {}): Promise<TestAp
     emails,
     temporal: temporal.client,
     skipTime: (duration) => temporal.sleep(duration),
-    provisionParticipant: (input) => provisionParticipant(auth, database.db, input),
-    async signIn(email, password) {
-      const res = await anonymous.post('/api/auth/sign-in/email', { email, password });
-      if (!res.ok) throw new Error(`登入失敗：${res.status} ${await res.text()}`);
-      const cookie = res.headers.getSetCookie().find((c) => c.includes('session_token='));
-      if (!cookie) throw new Error('登入回應沒有 session cookie');
-      return new ApiClient(baseUrl, cookie);
+    async provisionParticipant({ totp, ...input }) {
+      const result = await provisionParticipant(auth, database.db, input);
+      if (totp ?? input.permissions.some(requiresTotp)) {
+        await enableTotp(await signIn(input.email, input.password), input.password);
+      }
+      return result;
     },
+    signIn,
+    enableTotp,
     async close() {
       await app.close();
       worker.shutdown();
@@ -191,6 +256,29 @@ async function createIsolatedDatabase(serverUrl: string) {
       await client.end();
     },
   };
+}
+
+/** 從重設密碼信中取出連結裡的 token。 */
+export function resetPasswordToken(email: { text: string } | undefined): string {
+  const token = email?.text.match(/\/reset-password\/([\w-]+)/)?.[1];
+  if (!token) throw new Error(`信件裡沒有重設密碼連結：${email?.text}`);
+  return token;
+}
+
+/** 驗證器 app：用 otpauth URI 裡的 base32 secret 算出目前的 TOTP 驗證碼（RFC 6238，SHA-1、6 位數、30 秒）。 */
+export function totpCode(totpURI: string, now = Date.now()): string {
+  const secret = new URL(totpURI).searchParams.get('secret') ?? '';
+  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+  let bits = '';
+  for (const char of secret.replace(/=+$/, '').toUpperCase()) {
+    bits += alphabet.indexOf(char).toString(2).padStart(5, '0');
+  }
+  const key = Buffer.from((bits.match(/.{8}/g) ?? []).map((byte) => Number.parseInt(byte, 2)));
+  const counter = Buffer.alloc(8);
+  counter.writeBigUInt64BE(BigInt(Math.floor(now / 30_000)));
+  const hmac = createHmac('sha1', key).update(counter).digest();
+  const offset = (hmac.at(-1) ?? 0) & 0xf;
+  return String((hmac.readUInt32BE(offset) & 0x7fffffff) % 1_000_000).padStart(6, '0');
 }
 
 /** 從邀請信中取出設定密碼連結裡的 token。 */
