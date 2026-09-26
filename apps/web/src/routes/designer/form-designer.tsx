@@ -378,7 +378,7 @@ function FieldRow({
   return (
     <li
       ref={setNodeRef}
-      style={{ transform: CSS.Transform.toString(transform), transition }}
+      style={{ transform: CSS.Translate.toString(transform), transition }}
       className={cn(
         'border-b bg-card',
         isDragging && 'relative z-10 shadow-lg',

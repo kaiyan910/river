@@ -418,11 +418,9 @@ function HttpLine({
   return (
     <div className="mt-1 grid gap-0.5 text-[0.85em] text-muted-foreground">
       {url.trim() ? (
-        <div className="flex items-center gap-1.5">
+        <div className="flex items-baseline gap-1.5">
           <span className="shrink-0 font-mono text-[0.9em]">{method}</span>
-          <span className="truncate font-mono text-[0.9em]" title={url}>
-            {url}
-          </span>
+          <span className="min-w-0 break-all font-mono text-[0.9em]">{url}</span>
         </div>
       ) : (
         <div className="text-destructive">未填寫 URL</div>
@@ -486,7 +484,7 @@ function PersonLine({ participantId }: { participantId: string }) {
   );
 }
 
-export const nodeTypes = {
+export const nodeTypes: Record<NodeType, typeof NodeCard> = {
   start: NodeCard,
   form: NodeCard,
   approval: NodeCard,
@@ -494,5 +492,6 @@ export const nodeTypes = {
   parallelSplit: NodeCard,
   parallelJoin: NodeCard,
   email: NodeCard,
+  http: NodeCard,
   end: NodeCard,
 };
