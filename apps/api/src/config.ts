@@ -19,7 +19,6 @@ export const apiEnvSchema = z.object({
         .filter(Boolean),
     ),
   PORT: z.coerce.number().int().default(3000),
-  LOG_LEVEL: z.string().default('info'),
 });
 
 export type ApiEnv = z.infer<typeof apiEnvSchema>;

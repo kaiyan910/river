@@ -112,7 +112,7 @@ export async function startTestApp(): Promise<TestApp> {
     appUrl: ORIGIN,
     temporal: temporal.client,
     taskQueue: TASK_QUEUE,
-    logLevel: 'silent',
+    log: { LOG_LEVEL: 'silent', LOG_FORMAT: 'json' },
   });
   await app.listen(0, '127.0.0.1');
   const baseUrl = await app.getUrl();

@@ -1,5 +1,6 @@
 import { connectDatabase } from '@river/db';
 import { createEmailSender, emailEnvSchema } from '@river/email';
+import { loggerEnvSchema } from '@river/logger';
 import { Client, Connection } from '@temporalio/client';
 import { createAuth } from './auth/create-auth.js';
 import { apiEnvSchema, authOptionsFromEnv } from './config.js';
@@ -17,7 +18,7 @@ const app = await createApp({
   appUrl: env.BETTER_AUTH_URL,
   temporal: new Client({ connection, namespace: env.TEMPORAL_NAMESPACE }),
   taskQueue: env.TEMPORAL_TASK_QUEUE,
-  logLevel: env.LOG_LEVEL,
+  log: loggerEnvSchema.parse(process.env),
 });
 app.enableShutdownHooks();
 await app.listen(env.PORT);

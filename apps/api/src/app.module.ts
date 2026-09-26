@@ -1,7 +1,9 @@
+import type { IncomingMessage } from 'node:http';
 import { type DynamicModule, Global, Module } from '@nestjs/common';
 import { APP_PIPE } from '@nestjs/core';
 import type { Database } from '@river/db';
 import type { EmailSender } from '@river/email';
+import { createLogger, type LoggerEnv } from '@river/logger';
 import type { Client } from '@temporalio/client';
 import { AuthModule } from '@thallesp/nestjs-better-auth';
 import { LoggerModule } from 'nestjs-pino';
@@ -29,7 +31,7 @@ export interface AppDeps {
   appUrl: string;
   temporal: Client;
   taskQueue: string;
-  logLevel: string;
+  log: LoggerEnv;
 }
 
 @Global()
@@ -58,7 +60,15 @@ export class AppModule {
       module: AppModule,
       imports: [
         InfrastructureModule.register(deps),
-        LoggerModule.forRoot({ pinoHttp: { level: deps.logLevel } }),
+        LoggerModule.forRoot({
+          pinoHttp: {
+            logger: createLogger(deps.log, 'api'),
+            customSuccessMessage: (req, res, responseTime) =>
+              `${req.method} ${requestUrl(req)} ${res.statusCode} ${responseTime}ms`,
+            customErrorMessage: (req, res, error) =>
+              `${req.method} ${requestUrl(req)} ${res.statusCode} ${error.message}`,
+          },
+        }),
         AuthModule.forRoot({ auth: deps.auth }),
         OrgModule,
         ProcessModule,
@@ -68,4 +78,9 @@ export class AppModule {
       providers: [{ provide: APP_PIPE, useClass: ZodValidationPipe }],
     };
   }
+}
+
+/** Express 進到子路由後會改寫 req.url，originalUrl 才是完整路徑。 */
+function requestUrl(req: IncomingMessage): string {
+  return (req as IncomingMessage & { originalUrl?: string }).originalUrl ?? req.url ?? '';
 }

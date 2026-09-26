@@ -1,8 +1,9 @@
 import { connectDatabase } from '@river/db';
 import { createEmailSender, emailEnvSchema } from '@river/email';
-import { NativeConnection } from '@temporalio/worker';
-import { pino } from 'pino';
+import { createLogger, loggerEnvSchema } from '@river/logger';
+import { makeTelemetryFilterString, NativeConnection, Runtime } from '@temporalio/worker';
 import { z } from 'zod';
+import { temporalLogger } from './temporal-logger.js';
 import { createWorker } from './worker.js';
 
 const env = z
@@ -17,7 +18,14 @@ const env = z
   .parse(process.env);
 const emailEnv = emailEnvSchema.parse(process.env);
 
-const logger = pino({ name: 'worker' });
+const logger = createLogger(loggerEnvSchema.parse(process.env), 'worker');
+// 必須在建立任何 connection 之前安裝；core 的 log 也轉送過來，不再直接印到 console。
+Runtime.install({
+  logger: temporalLogger(logger),
+  telemetryOptions: {
+    logging: { filter: makeTelemetryFilterString({ core: 'WARN' }), forward: {} },
+  },
+});
 const database = connectDatabase(env.DATABASE_URL);
 const connection = await NativeConnection.connect({ address: env.TEMPORAL_ADDRESS });
 const worker = await createWorker({
