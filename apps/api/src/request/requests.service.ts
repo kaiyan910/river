@@ -56,7 +56,8 @@ export class RequestsService {
     if (!(await canStart(this.db, input.processId, me.id)))
       throw new ForbiddenException('你不在這個 Process 的 Initiator Role 裡，不能發起');
     const startForm = startFormOf(current.dsl);
-    const submission = validateStepData(
+    const submission = await validateStepData(
+      this.db,
       startForm,
       await this.attachments.resolve(startForm, input.data, { submitterId: me.id }),
     );
@@ -111,7 +112,8 @@ export class RequestsService {
     if (!request || request.initiatorId !== me.id)
       throw new NotFoundException('找不到這筆 Request');
     const startForm = startFormOf(request.dsl);
-    const submission = validateStepData(
+    const submission = await validateStepData(
+      this.db,
       startForm,
       await this.attachments.resolve(startForm, input.data, { submitterId: me.id, requestId: id }),
     );

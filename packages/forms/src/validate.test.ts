@@ -149,3 +149,102 @@ describe('依 Form schema 驗證填寫的資料', () => {
     expect(check(form(field('v', 'text')), ['v']).success).toBe(false);
   });
 });
+
+describe('人員選擇器', () => {
+  const OWNER = '0b6c5a0e-8f4e-4d7a-9c1b-2f3e4a5b6c7d';
+
+  it('存下選到的 Participant ID', () => {
+    const f = form(field('owner', 'person', { required: true }));
+    expect(check(f, { owner: OWNER })).toEqual({ success: true, data: { owner: OWNER } });
+  });
+
+  it('沒有選時存成空值；必填時回報「必填」', () => {
+    expect(check(form(field('owner', 'person')), {})).toEqual({
+      success: true,
+      data: { owner: null },
+    });
+    expect(check(form(field('owner', 'person', { required: true })), { owner: '' })).toEqual({
+      success: false,
+      errors: { owner: '必填' },
+    });
+  });
+
+  it.each([['王小明'], [42], [{ id: OWNER }]])('不是 Participant ID 的值被拒絕：%j', (value) => {
+    expect(check(form(field('owner', 'person')), { owner: value })).toEqual({
+      success: false,
+      errors: { owner: '不是有效的人員' },
+    });
+  });
+});
+
+describe('明細表', () => {
+  const items = (extra: Partial<FormField> = {}) =>
+    field('items', 'table', {
+      columns: [
+        { id: 'c1', key: 'item', type: 'text', label: '項目', required: true, rules: {} },
+        { id: 'c2', key: 'amount', type: 'money', label: '金額', required: true, rules: {} },
+        { id: 'c3', key: 'payee', type: 'person', label: '收款人', required: false, rules: {} },
+      ],
+      ...extra,
+    });
+
+  it('每一行依欄位定義正規化，沒有定義的鍵被丟掉', () => {
+    const result = check(form(items()), {
+      items: [
+        { item: ' 計程車 ', amount: '350', extra: 'x' },
+        { item: '住宿', amount: 2400.5 },
+      ],
+    });
+
+    expect(result).toEqual({
+      success: true,
+      data: {
+        items: [
+          { item: '計程車', amount: 350, payee: null },
+          { item: '住宿', amount: 2400.5, payee: null },
+        ],
+      },
+    });
+  });
+
+  it('每一行分別驗證，錯誤的鍵標出第幾行的哪一欄', () => {
+    const result = check(form(items()), {
+      items: [
+        { item: '計程車', amount: '350' },
+        { item: '', amount: 'abc' },
+      ],
+    });
+
+    expect(result).toEqual({
+      success: false,
+      errors: { 'items[1].item': '必填', 'items[1].amount': '請輸入數字' },
+    });
+  });
+
+  it('選填的明細表沒有填時存成空陣列；必填時至少要有一行', () => {
+    expect(check(form(items()), {})).toEqual({ success: true, data: { items: [] } });
+    expect(check(form(items({ required: true })), { items: [] })).toEqual({
+      success: false,
+      errors: { items: '至少要有一行' },
+    });
+  });
+
+  it('不是陣列、或某一行不是物件時被拒絕', () => {
+    expect(check(form(items()), { items: 'x' })).toEqual({
+      success: false,
+      errors: { items: '格式不正確' },
+    });
+    expect(check(form(items()), { items: ['x'] })).toEqual({
+      success: false,
+      errors: { 'items[0]': '格式不正確' },
+    });
+  });
+
+  it('最多 100 行', () => {
+    const rows = Array.from({ length: 101 }, () => ({ item: 'a', amount: 1 }));
+    expect(check(form(items()), { items: rows })).toEqual({
+      success: false,
+      errors: { items: '最多 100 行' },
+    });
+  });
+});

@@ -1,5 +1,5 @@
 import { ATTACHMENT_EXTENSION_PATTERN } from './attachment.js';
-import type { FormSchema } from './schema.js';
+import type { FormField, FormSchema, TableColumn } from './schema.js';
 
 export const FORM_ERROR_CODES = [
   'FORM_NO_NAME',
@@ -12,6 +12,7 @@ export const FORM_ERROR_CODES = [
   'FIELD_BAD_RANGE',
   'FIELD_BAD_PATTERN',
   'FIELD_BAD_ACCEPT',
+  'FIELD_NO_COLUMNS',
 ] as const;
 export type FormErrorCode = (typeof FORM_ERROR_CODES)[number];
 
@@ -32,21 +33,32 @@ export const FIELD_KEY_PATTERN = /^[a-z][a-zA-Z0-9_]*$/;
  */
 export function checkForm(form: FormSchema): FormError[] {
   const errors: FormError[] = [];
-  const push = (fieldId: string | null, code: FormErrorCode, message: string) =>
+  const push: Push = (fieldId, code, message) =>
     errors.push({ formId: form.id, fieldId, code, message });
 
   if (!form.name.trim()) push(null, 'FORM_NO_NAME', '有一份 Form 沒有名稱。');
   if (form.fields.length === 0) push(null, 'FORM_EMPTY', `「${form.name}」還沒有任何欄位。`);
 
+  checkFields(form.fields, form.name, push);
+  return errors;
+}
+
+type Push = (fieldId: string | null, code: FormErrorCode, message: string) => void;
+
+/**
+ * 檢查一組欄位：Form 的欄位，或明細表的欄（代碼只需要在同一張明細表裡不重複）。
+ * scope 是錯誤訊息裡的名稱：Form 名稱，或「Form 名稱」的「明細表名稱」。
+ */
+function checkFields(fields: readonly (FormField | TableColumn)[], scope: string, push: Push) {
   const keys = new Set<string>();
-  for (const f of form.fields) {
+  for (const f of fields) {
     const label = f.label.trim() || f.key || '未命名的欄位';
-    if (!f.label.trim()) push(f.id, 'FIELD_NO_LABEL', `「${form.name}」有一個欄位沒有名稱。`);
+    if (!f.label.trim()) push(f.id, 'FIELD_NO_LABEL', `「${scope}」有一個欄位沒有名稱。`);
 
     if (!FIELD_KEY_PATTERN.test(f.key))
       push(f.id, 'FIELD_BAD_KEY', `「${label}」的欄位代碼要以小寫英文字母開頭，只能有英數與底線。`);
     else if (keys.has(f.key))
-      push(f.id, 'FIELD_DUPLICATE_KEY', `「${form.name}」的欄位代碼「${f.key}」重複。`);
+      push(f.id, 'FIELD_DUPLICATE_KEY', `「${scope}」的欄位代碼「${f.key}」重複。`);
     keys.add(f.key);
 
     if (f.type === 'radio' || f.type === 'multiselect') {
@@ -54,6 +66,13 @@ export function checkForm(form: FormSchema): FormError[] {
       if (!options.some(Boolean)) push(f.id, 'FIELD_NO_OPTIONS', `「${label}」至少要有一個選項。`);
       else if (new Set(options).size !== options.length || options.some((o) => !o))
         push(f.id, 'FIELD_DUPLICATE_OPTION', `「${label}」的選項有空白或重複。`);
+    }
+
+    if (f.type === 'table') {
+      const columns = 'columns' in f ? (f.columns ?? []) : [];
+      if (columns.length === 0)
+        push(f.id, 'FIELD_NO_COLUMNS', `明細表「${label}」至少要有一個欄位。`);
+      checkFields(columns, `${scope}」的「${label}`, push);
     }
 
     const r = f.rules;
@@ -73,7 +92,6 @@ export function checkForm(form: FormSchema): FormError[] {
     if (f.type === 'attachment' && r.accept?.some((a) => !ATTACHMENT_EXTENSION_PATTERN.test(a)))
       push(f.id, 'FIELD_BAD_ACCEPT', `「${label}」允許的檔案類型要是副檔名，例如 .pdf。`);
   }
-  return errors;
 }
 
 /**

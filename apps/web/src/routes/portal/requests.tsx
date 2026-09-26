@@ -194,7 +194,8 @@ function ResubmitPanel({ request }: { request: RequestDetail }) {
   const rejected = formRejection(resubmit.error);
   const startStep = request.steps.find((s) => s.type === 'start');
   const form = request.forms.find((f) => f.id === startStep?.formId) ?? null;
-  const data = request.data.find((d) => d.nodeId === startStep?.nodeId)?.data ?? {};
+  const section = request.data.find((d) => d.nodeId === startStep?.nodeId);
+  const data = section?.data ?? {};
   const returned = request.returned;
 
   return (
@@ -225,6 +226,7 @@ function ResubmitPanel({ request }: { request: RequestDetail }) {
         form={form}
         withTitle={{ placeholder: request.title }}
         initial={{ title: request.title, data }}
+        people={section?.people}
         submitLabel="重新送出"
         pending={resubmit.isPending}
         serverErrors={rejected?.errors}

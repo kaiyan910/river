@@ -8,6 +8,7 @@ import {
   Patch,
   Post,
   Put,
+  Query,
 } from '@nestjs/common';
 import { ApiCreatedResponse, ApiOkResponse } from '@nestjs/swagger';
 import {
@@ -19,14 +20,21 @@ import {
   type ImportParticipantsResult,
   importParticipantsResultSchema,
   importParticipantsSchema,
+  type PersonOption,
   participantListSchema,
   participantSchema,
+  personOptionListSchema,
+  personSearchQuerySchema,
   setPermissionsSchema,
   updateParticipantSchema,
 } from '@river/contracts';
 import { createZodDto } from 'nestjs-zod';
 import type { ActiveParticipant } from '../auth/active-participant.js';
-import { CurrentParticipant, RequirePermission } from '../auth/require-permission.js';
+import {
+  CurrentParticipant,
+  RequireParticipant,
+  RequirePermission,
+} from '../auth/require-permission.js';
 import { DeactivationService } from './deactivation.service.js';
 import { ParticipantImportService } from './participant-import.service.js';
 import { ParticipantsService } from './participants.service.js';
@@ -34,6 +42,8 @@ import { ParticipantsService } from './participants.service.js';
 class ParticipantDto extends createZodDto(participantSchema) {}
 class ParticipantListDto extends createZodDto(participantListSchema) {}
 class DirectoryDto extends createZodDto(directorySchema) {}
+class PersonOptionListDto extends createZodDto(personOptionListSchema) {}
+class PersonSearchQueryDto extends createZodDto(personSearchQuerySchema) {}
 class CreateParticipantDto extends createZodDto(createParticipantSchema) {}
 class UpdateParticipantDto extends createZodDto(updateParticipantSchema) {}
 class SetPermissionsDto extends createZodDto(setPermissionsSchema) {}
@@ -71,6 +81,14 @@ export class ParticipantsController {
   @ApiOkResponse({ type: DirectoryDto })
   directory(): Promise<DirectoryEntry[]> {
     return this.participants.directory();
+  }
+
+  /** Form 的人員選擇器：填表的人都需要，所以任何有效的 Participant 都能搜尋；已停用的人不會列出。 */
+  @Get('search')
+  @RequireParticipant()
+  @ApiOkResponse({ type: PersonOptionListDto })
+  search(@Query() query: PersonSearchQueryDto): Promise<PersonOption[]> {
+    return this.participants.search(query.q);
   }
 
   @Post()

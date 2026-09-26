@@ -96,7 +96,8 @@ export class TasksService {
             task.dsl.nodes.find((n) => n.id === task.nodeId),
           )
         : null;
-    const submission = validateStepData(
+    const submission = await validateStepData(
+      this.db,
       form,
       await this.attachments.resolve(form, input.data, {
         submitterId: me.id,

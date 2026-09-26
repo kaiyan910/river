@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { attachmentFieldSchema } from './attachment.js';
 import { isSafePattern } from './check.js';
-import type { FormField, FormSchema } from './schema.js';
+import { type FormField, type FormSchema, TABLE_MAX_ROWS } from './schema.js';
 
 export interface FormValidationOptions {
   /** 今天的日期（YYYY-MM-DD），用於「不能早於今天」；呼叫端用 todayIn() 取得。 */
@@ -37,6 +37,10 @@ function isDate(v: string): boolean {
   const d = new Date(`${v}T00:00:00Z`);
   return !Number.isNaN(d.getTime()) && d.toISOString().startsWith(v);
 }
+
+/** Participant ID（UUID）。人員是否存在、是否停用由 API 另外檢查（見 personRefs）。 */
+export const PARTICIPANT_ID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /** 只執行通過 checkForm 的格式；萬一沒擋到（例如還沒發佈的草稿預覽），寧可略過也不要卡住。 */
 function safeRegex(pattern: string): RegExp | null {
@@ -105,7 +109,40 @@ function fieldSchema(f: FormField, options: FormValidationOptions): z.ZodType {
       });
     case 'attachment':
       return attachmentFieldSchema(f);
+    case 'person':
+      return single(f, (v, ctx) =>
+        typeof v === 'string' && PARTICIPANT_ID_PATTERN.test(v.trim())
+          ? v.trim().toLowerCase()
+          : fail(ctx, '不是有效的人員'),
+      );
+    case 'table':
+      // 每一行是一個物件，依明細表的欄分別驗證；錯誤的路徑帶著第幾行（例如 items[1].amount）。
+      return z
+        .preprocess(
+          (v) => v ?? [],
+          z
+            .array(fieldsObject(f.columns ?? [], options), { error: '格式不正確' })
+            .max(TABLE_MAX_ROWS, `最多 ${TABLE_MAX_ROWS} 行`),
+        )
+        .superRefine((rows, ctx) => {
+          if (f.required && rows.length === 0)
+            ctx.addIssue({ code: 'custom', message: '至少要有一行' });
+        });
   }
+}
+
+/** 一組欄位的物件：沒送的欄位補成 null，交給各欄位判斷必填；不是物件的輸入被拒絕。 */
+function fieldsObject(fields: readonly FormField[], options: FormValidationOptions) {
+  const shape = z.object(Object.fromEntries(fields.map((f) => [f.key, fieldSchema(f, options)])), {
+    error: '格式不正確',
+  });
+  return z.preprocess(
+    (v) =>
+      v && typeof v === 'object' && !Array.isArray(v)
+        ? { ...Object.fromEntries(fields.map((f) => [f.key, null])), ...v }
+        : v,
+    shape,
+  );
 }
 
 /**
@@ -113,17 +150,7 @@ function fieldSchema(f: FormField, options: FormValidationOptions): z.ZodType {
  * 輸入可以是畫面上的值（數字欄位是字串）；輸出是存進 request_data 的正規化資料。
  */
 export function formToZod(form: FormSchema, options: FormValidationOptions) {
-  const shape = z.object(
-    Object.fromEntries(form.fields.map((f) => [f.key, fieldSchema(f, options)])),
-  );
-  // 沒送的欄位補成 null，交給各欄位判斷必填；不是物件的輸入由 z.object 回報。
-  return z.preprocess(
-    (v) =>
-      v && typeof v === 'object' && !Array.isArray(v)
-        ? { ...Object.fromEntries(form.fields.map((f) => [f.key, null])), ...v }
-        : v,
-    shape,
-  );
+  return fieldsObject(form.fields, options);
 }
 
 export type StoredFormData = Record<string, unknown>;
@@ -132,7 +159,17 @@ export type FormValidationResult =
   | { success: true; data: StoredFormData }
   | { success: false; errors: Record<string, string> };
 
-/** 驗證整份資料；失敗時回傳每個欄位的第一個錯誤。 */
+/**
+ * 驗證錯誤的鍵：一般欄位是欄位代碼；明細表裡的欄是「代碼[第幾行].欄的代碼」，例如 items[1].amount
+ * （和 TanStack Form 的欄位名稱寫法相同，行數從 0 開始）。
+ */
+export function fieldPath(path: readonly PropertyKey[]): string {
+  return path
+    .map((p, i) => (typeof p === 'number' ? `[${p}]` : `${i > 0 ? '.' : ''}${String(p)}`))
+    .join('');
+}
+
+/** 驗證整份資料；失敗時回傳每個欄位（明細表則是每一格）的第一個錯誤。 */
 export function validateFormData(
   form: FormSchema,
   data: unknown,
@@ -141,6 +178,6 @@ export function validateFormData(
   const result = formToZod(form, options).safeParse(data);
   if (result.success) return { success: true, data: result.data as StoredFormData };
   const errors: Record<string, string> = {};
-  for (const issue of result.error.issues) errors[String(issue.path[0] ?? '')] ??= issue.message;
+  for (const issue of result.error.issues) errors[fieldPath(issue.path)] ??= issue.message;
   return { success: false, errors };
 }

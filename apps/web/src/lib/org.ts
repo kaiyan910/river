@@ -7,6 +7,7 @@ import {
   type Participant,
   participantListSchema,
   participantSchema,
+  personOptionListSchema,
   roleDirectorySchema,
   roleListSchema,
   roleSchema,
@@ -26,6 +27,15 @@ export const directoryQueryOptions = queryOptions({
   queryFn: () => api('/participants/directory', { schema: directorySchema }),
   staleTime: 60_000,
 });
+
+/** Form 的人員選擇器：任何 Participant 都可以搜尋沒有停用的人。 */
+export const personSearchQueryOptions = (q: string) =>
+  queryOptions({
+    queryKey: ['participants', 'search', q],
+    queryFn: () =>
+      api(`/participants/search?q=${encodeURIComponent(q)}`, { schema: personOptionListSchema }),
+    staleTime: 30_000,
+  });
 
 /** 挑選 Role 用的精簡清單（Designer 把人工步驟指派給 Role）。 */
 export const roleDirectoryQueryOptions = queryOptions({

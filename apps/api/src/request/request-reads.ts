@@ -18,6 +18,7 @@ import {
   tasks,
 } from '@river/db';
 import { formIdOf, type TaskAssignee } from '@river/dsl';
+import { personRefs } from '@river/forms';
 import { and, asc, desc, eq, inArray, isNotNull, max, type SQL } from 'drizzle-orm';
 import { type Viewer, visibleTo } from '../auth/data-access.js';
 import {
@@ -154,7 +155,13 @@ export class RequestReads {
       .orderBy(asc(requestData.submittedAt));
 
     const dsl = current?.dsl ?? { nodes: [], edges: [], forms: [] };
+    // 每一步的人員選擇器（包括明細表裡的）選到的人，唯讀顯示時帶出姓名。
+    const picked = dataRows.map((d) => {
+      const form = dsl.forms.find((f) => f.id === d.formId);
+      return form ? [...new Set(personRefs(form, d.data).map((r) => r.id))] : [];
+    });
     const names = await lookupNames(this.db, [
+      ...picked.flat(),
       ...taskRows.flatMap(taskPeople),
       ...eventRows.flatMap((e) => (e.actorId ? [e.actorId] : [])),
       ...dataRows.map((d) => d.submittedBy),
@@ -208,11 +215,12 @@ export class RequestReads {
         })),
       },
       forms: dsl.forms.filter((f) => usedForms.has(f.id)),
-      data: dataRows.map((d) => ({
+      data: dataRows.map((d, i) => ({
         nodeId: d.nodeId,
         nodeName: nodeNames.get(d.nodeId) ?? d.nodeId,
         formId: d.formId,
         data: d.data,
+        people: (picked[i] ?? []).map((id) => actor(names, id)),
         submittedBy: actor(names, d.submittedBy),
         submittedAt: iso(d.submittedAt),
       })),

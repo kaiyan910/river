@@ -27,6 +27,9 @@ import {
   type FormField,
   type FormSchema,
   normalizeAccept,
+  TABLE_COLUMN_TYPES,
+  TABLE_MAX_COLUMNS,
+  type TableColumn,
   todayIn,
   validateFormData,
 } from '@river/forms';
@@ -43,13 +46,15 @@ import {
   ListChecks,
   Paperclip,
   Plus,
+  Table2,
   Text,
   TextCursorInput,
   Trash2,
+  UserRound,
 } from 'lucide-react';
 import { type ReactNode, useState } from 'react';
 import { AttachmentTransportProvider, previewTransport } from '@/components/attachment-field';
-import { FormDataView, FormRunner } from '@/components/form-fields';
+import { FormDataView, FormRunner, PeopleNamesProvider } from '@/components/form-fields';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Switch } from '@/components/ui/switch';
@@ -65,6 +70,8 @@ export const FIELD_ICONS: Record<FieldType, typeof Text> = {
   multiselect: ListChecks,
   checkbox: CheckSquare,
   attachment: Paperclip,
+  person: UserRound,
+  table: Table2,
 };
 
 /** 可以指定 Form 的節點（開始、填表）。 */
@@ -84,6 +91,8 @@ export function newForm(existing: FormSchema[]): FormSchema {
   return { id: `form-${shortId()}`, name: `新的 Form ${n}`, fields: [] };
 }
 
+const DEFAULT_OPTIONS = ['選項 1', '選項 2'];
+
 function newField(type: FieldType, form: FormSchema): FormField {
   const keys = new Set(form.fields.map((f) => f.key));
   let n = form.fields.length + 1;
@@ -95,12 +104,40 @@ function newField(type: FieldType, form: FormSchema): FormField {
     label: `新的${FIELD_TYPE_LABELS[type]}`,
     required: false,
     rules: {},
-    options: type === 'radio' || type === 'multiselect' ? ['選項 1', '選項 2'] : undefined,
+    options: type === 'radio' || type === 'multiselect' ? DEFAULT_OPTIONS : undefined,
+    // 明細表先放兩欄（例如報銷的項目與金額），Designer 再調整。
+    columns:
+      type === 'table'
+        ? [
+            newColumn('text', [], { key: 'item', label: '項目', required: true }),
+            newColumn('money', [], { key: 'amount', label: '金額', required: true }),
+          ]
+        : undefined,
+  };
+}
+
+function newColumn(
+  type: TableColumn['type'],
+  columns: TableColumn[],
+  extra: Partial<TableColumn> = {},
+): TableColumn {
+  const keys = new Set(columns.map((c) => c.key));
+  let n = columns.length + 1;
+  while (keys.has(`col_${n}`)) n++;
+  return {
+    id: `col-${shortId()}`,
+    key: `col_${n}`,
+    type,
+    label: `新的${FIELD_TYPE_LABELS[type]}`,
+    required: false,
+    rules: {},
+    options: type === 'radio' || type === 'multiselect' ? DEFAULT_OPTIONS : undefined,
+    ...extra,
   };
 }
 
 /** 規則的白話摘要，顯示在欄位表格上。 */
-export function describeRules(f: FormField): string[] {
+export function describeRules(f: FormField | TableColumn): string[] {
   const r = f.rules;
   const out: string[] = [];
   if (r.minLength) out.push(`≥ ${r.minLength} 字`);
@@ -117,6 +154,7 @@ export function describeRules(f: FormField): string[] {
   }
   if (f.type === 'radio' || f.type === 'multiselect')
     out.push(`${(f.options ?? []).filter(Boolean).length} 個選項`);
+  if ('columns' in f && f.type === 'table') out.push(`${(f.columns ?? []).length} 欄`);
   return out;
 }
 
@@ -239,7 +277,12 @@ export function FormSheet({
                   key={f.id}
                   field={f}
                   open={open === f.id}
-                  errors={errors.filter((e) => e.fieldId === f.id).map((e) => e.message)}
+                  errors={errors
+                    .filter(
+                      (e) =>
+                        e.fieldId === f.id || (f.columns ?? []).some((c) => c.id === e.fieldId),
+                    )
+                    .map((e) => e.message)}
                   onToggle={() => setOpen(open === f.id ? null : f.id)}
                   onChange={(patch) => patchField(f.id, patch)}
                   onRemove={() =>
@@ -481,7 +524,7 @@ function FieldSettings({
   errors,
   onChange,
 }: {
-  field: FormField;
+  field: FormField | TableColumn;
   errors: string[];
   onChange: (patch: Partial<FormField>) => void;
 }) {
@@ -603,6 +646,19 @@ function FieldSettings({
             onChange={(v) => rules({ maxSelected: v })}
           />
         )}
+        {t === 'person' && (
+          <p className="col-span-2 self-end text-[0.85em] text-muted-foreground">
+            填寫的人可以搜尋沒有停用的 Participant；存下的是 Participant ID，JSONata 以 ID 比對。
+          </p>
+        )}
+        {t === 'table' && 'columns' in field && (
+          <div className="col-span-2 lg:col-span-4">
+            <ColumnsSetting
+              columns={field.columns ?? []}
+              onChange={(columns) => onChange({ columns })}
+            />
+          </div>
+        )}
       </div>
       {errors.length > 0 && (
         <ul className="grid gap-1 text-[0.86em] text-destructive">
@@ -643,6 +699,129 @@ function AcceptSetting({
         onBlur={() => setText(apply(text).join(', '))}
       />
     </Setting>
+  );
+}
+
+/**
+ * 明細表的欄：每一欄和一般欄位一樣有名稱、代碼、類型、必填與規則（展開後設定）。
+ * 代碼只需要在同一張明細表裡不重複；JSONata 以「明細表代碼.欄的代碼」讀取，例如 $sum(items.amount)。
+ */
+function ColumnsSetting({
+  columns,
+  onChange,
+}: {
+  columns: TableColumn[];
+  onChange: (columns: TableColumn[]) => void;
+}) {
+  const [open, setOpen] = useState<string | null>(null);
+  const patch = (id: string, p: Partial<TableColumn>) =>
+    onChange(columns.map((c) => (c.id === id ? { ...c, ...p } : c)));
+  return (
+    <div className="grid gap-1.5">
+      <span className="text-[0.85em] text-muted-foreground">
+        明細表的欄位（每一行都要填這些欄）
+      </span>
+      <ul aria-label="明細表的欄位" className="grid overflow-hidden rounded-lg border bg-card">
+        {columns.map((c, i) => (
+          <li key={c.id} className="border-b last:border-0">
+            <div className="grid grid-cols-[minmax(0,7em)_minmax(0,1.2fr)_minmax(0,1fr)_auto_auto_auto] items-center gap-2 px-2 py-1.5">
+              <select
+                aria-label={`第 ${i + 1} 欄的類型`}
+                value={c.type}
+                onChange={(e) => {
+                  const type = e.target.value as TableColumn['type'];
+                  const choice = type === 'radio' || type === 'multiselect';
+                  patch(c.id, {
+                    type,
+                    rules: {},
+                    options: choice ? (c.options?.length ? c.options : DEFAULT_OPTIONS) : undefined,
+                  });
+                }}
+                className="h-8 min-w-0 rounded-md border border-input bg-card px-1.5 text-[0.9em]"
+              >
+                {TABLE_COLUMN_TYPES.map((t) => (
+                  <option key={t} value={t}>
+                    {FIELD_TYPE_LABELS[t]}
+                  </option>
+                ))}
+              </select>
+              <input
+                value={c.label}
+                maxLength={100}
+                onChange={(e) => patch(c.id, { label: e.target.value })}
+                aria-label={`第 ${i + 1} 欄的名稱`}
+                aria-invalid={!c.label.trim() || undefined}
+                className="h-8 min-w-0 rounded-md border border-input bg-card px-1.5 aria-invalid:border-destructive/60"
+              />
+              <input
+                value={c.key}
+                maxLength={50}
+                onChange={(e) => patch(c.id, { key: e.target.value })}
+                aria-label={`第 ${i + 1} 欄的代碼`}
+                aria-invalid={
+                  !FIELD_KEY_PATTERN.test(c.key) ||
+                  columns.some((x) => x.id !== c.id && x.key === c.key) ||
+                  undefined
+                }
+                spellCheck={false}
+                className="h-8 min-w-0 rounded-md border border-input bg-card px-1.5 font-mono text-[0.88em] text-muted-foreground aria-invalid:border-destructive/60"
+              />
+              <label className="flex items-center gap-1 text-[0.85em]">
+                <input
+                  type="checkbox"
+                  checked={c.required}
+                  onChange={(e) => patch(c.id, { required: e.target.checked })}
+                />
+                必填
+              </label>
+              <button
+                type="button"
+                onClick={() => setOpen(open === c.id ? null : c.id)}
+                aria-expanded={open === c.id}
+                aria-label={`「${c.label}」的規則`}
+                className="grid cursor-pointer place-items-center text-muted-foreground"
+              >
+                {open === c.id ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+              </button>
+              <button
+                type="button"
+                onClick={() => onChange(columns.filter((x) => x.id !== c.id))}
+                aria-label={`刪除「${c.label}」欄`}
+                className="grid cursor-pointer place-items-center text-muted-foreground hover:text-destructive"
+              >
+                <Trash2 size={14} />
+              </button>
+            </div>
+            {open === c.id && (
+              <div className="border-t border-dashed bg-muted/30 px-3 py-3">
+                <FieldSettings
+                  field={c}
+                  errors={[]}
+                  onChange={(p) => patch(c.id, p as Partial<TableColumn>)}
+                />
+              </div>
+            )}
+          </li>
+        ))}
+        {columns.length === 0 && (
+          <li className="px-3 py-2 text-[0.9em] text-muted-foreground">還沒有欄位。</li>
+        )}
+      </ul>
+      <div>
+        <Button
+          size="sm"
+          variant="ghost"
+          disabled={columns.length >= TABLE_MAX_COLUMNS}
+          onClick={() => {
+            const column = newColumn('text', columns);
+            onChange([...columns, column]);
+            setOpen(null);
+          }}
+        >
+          <Plus size={14} aria-hidden /> 新增欄
+        </Button>
+      </div>
+    </div>
   );
 }
 
@@ -693,91 +872,112 @@ function LivePreview({ form }: { form: FormSchema }) {
     ['rules', '驗證規則'],
   ];
   return (
-    <section aria-label="即時預覽" className="flex min-h-0 flex-col bg-background">
-      <div role="tablist" className="flex gap-0.5 border-b bg-card px-3 py-1.5 text-[0.88em]">
-        <span className="mr-2 self-center text-muted-foreground">即時預覽</span>
-        {tabs.map(([k, label]) => (
-          <button
-            key={k}
-            type="button"
-            role="tab"
-            aria-selected={tab === k}
-            onClick={() => setTab(k)}
-            className={cn(
-              'cursor-pointer rounded-md px-2.5 py-1',
-              tab === k ? 'bg-accent text-accent-foreground' : 'text-muted-foreground',
-            )}
-          >
-            {label}
-          </button>
-        ))}
-      </div>
-      <div className="min-h-0 flex-1 overflow-auto p-4">
-        <AttachmentTransportProvider value={previewTransport}>
-          {tab === 'fill' && (
-            <div className="rounded-xl border bg-card p-4">
-              <FormRunner
-                key={JSON.stringify(form)}
-                form={form}
-                submitLabel="試送出"
-                onSubmit={({ data }) => {
-                  setTried(data);
-                  setTab('data');
-                }}
-                onInvalid={setTried}
-              />
-            </div>
-          )}
-          {tab === 'readonly' &&
-            (tried && result?.success ? (
+    // 填寫時選到的人，切到「審批人看到」時顯示姓名。
+    <PeopleNamesProvider>
+      <section aria-label="即時預覽" className="flex min-h-0 flex-col bg-background">
+        <div role="tablist" className="flex gap-0.5 border-b bg-card px-3 py-1.5 text-[0.88em]">
+          <span className="mr-2 self-center text-muted-foreground">即時預覽</span>
+          {tabs.map(([k, label]) => (
+            <button
+              key={k}
+              type="button"
+              role="tab"
+              aria-selected={tab === k}
+              onClick={() => setTab(k)}
+              className={cn(
+                'cursor-pointer rounded-md px-2.5 py-1',
+                tab === k ? 'bg-accent text-accent-foreground' : 'text-muted-foreground',
+              )}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+        <div className="min-h-0 flex-1 overflow-auto p-4">
+          <AttachmentTransportProvider value={previewTransport}>
+            {tab === 'fill' && (
               <div className="rounded-xl border bg-card p-4">
-                <FormDataView form={form} data={result.data} />
+                <FormRunner
+                  key={JSON.stringify(form)}
+                  form={form}
+                  submitLabel="試送出"
+                  onSubmit={({ data }) => {
+                    setTried(data);
+                    setTab('data');
+                  }}
+                  onInvalid={setTried}
+                />
               </div>
-            ) : (
-              <p className="text-muted-foreground">
-                在「填寫」試送出之後，這裡會顯示審批人看到的樣子。
-              </p>
-            ))}
-          {tab === 'data' &&
-            (result ? (
+            )}
+            {tab === 'readonly' &&
+              (tried && result?.success ? (
+                <div className="rounded-xl border bg-card p-4">
+                  <FormDataView form={form} data={result.data} />
+                </div>
+              ) : (
+                <p className="text-muted-foreground">
+                  在「填寫」試送出之後，這裡會顯示審批人看到的樣子。
+                </p>
+              ))}
+            {tab === 'data' &&
+              (result ? (
+                <div className="grid gap-2">
+                  <p className="text-[0.85em] text-muted-foreground">
+                    {result.success
+                      ? '通過驗證。這一步的資料會這樣存進 Postgres 的 request_data（不會進入 Temporal）：'
+                      : 'API 會拒絕上次試送出的資料（422），各欄位的錯誤：'}
+                  </p>
+                  <pre className="overflow-auto rounded-lg border bg-card p-3 font-mono text-[0.82em]">
+                    {JSON.stringify(result.success ? result.data : result.errors, null, 2)}
+                  </pre>
+                </div>
+              ) : (
+                <p className="text-muted-foreground">
+                  在「填寫」試送出之後，這裡會顯示存下的資料。
+                </p>
+              ))}
+            {tab === 'rules' && (
               <div className="grid gap-2">
                 <p className="text-[0.85em] text-muted-foreground">
-                  {result.success
-                    ? '通過驗證。這一步的資料會這樣存進 Postgres 的 request_data（不會進入 Temporal）：'
-                    : 'API 會拒絕上次試送出的資料（422），各欄位的錯誤：'}
+                  由這份 Form 產生的驗證；發起頁、填表頁與 API 都用同一份。
                 </p>
-                <pre className="overflow-auto rounded-lg border bg-card p-3 font-mono text-[0.82em]">
-                  {JSON.stringify(result.success ? result.data : result.errors, null, 2)}
-                </pre>
+                <table className="w-full overflow-hidden rounded-lg border bg-card text-[0.9em]">
+                  <tbody>
+                    {form.fields.flatMap((f) =>
+                      [
+                        { id: f.id, key: f.key, field: f as FormField | TableColumn },
+                        // 明細表每一行的欄，代碼寫成 JSONata 讀取的路徑。
+                        ...(f.columns ?? []).map((c) => ({
+                          id: c.id,
+                          key: `${f.key}[].${c.key}`,
+                          field: c as FormField | TableColumn,
+                        })),
+                      ].map(({ id, key, field: x }) => (
+                        <tr key={id} className="border-b last:border-0">
+                          <td className="px-3 py-1.5 font-mono text-[0.9em]">{key}</td>
+                          <td className="px-3 py-1.5 text-muted-foreground">
+                            {[
+                              FIELD_TYPE_LABELS[x.type],
+                              x.required
+                                ? x.type === 'checkbox'
+                                  ? '必須勾選'
+                                  : x.type === 'table'
+                                    ? '至少一行'
+                                    : '必填'
+                                : '選填',
+                              ...describeRules(x),
+                            ].join(' · ')}
+                          </td>
+                        </tr>
+                      )),
+                    )}
+                  </tbody>
+                </table>
               </div>
-            ) : (
-              <p className="text-muted-foreground">在「填寫」試送出之後，這裡會顯示存下的資料。</p>
-            ))}
-          {tab === 'rules' && (
-            <div className="grid gap-2">
-              <p className="text-[0.85em] text-muted-foreground">
-                由這份 Form 產生的驗證；發起頁、填表頁與 API 都用同一份。
-              </p>
-              <table className="w-full overflow-hidden rounded-lg border bg-card text-[0.9em]">
-                <tbody>
-                  {form.fields.map((f) => (
-                    <tr key={f.id} className="border-b last:border-0">
-                      <td className="px-3 py-1.5 font-mono text-[0.9em]">{f.key}</td>
-                      <td className="px-3 py-1.5 text-muted-foreground">
-                        {[
-                          FIELD_TYPE_LABELS[f.type],
-                          f.required ? (f.type === 'checkbox' ? '必須勾選' : '必填') : '選填',
-                          ...describeRules(f),
-                        ].join(' · ')}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </AttachmentTransportProvider>
-      </div>
-    </section>
+            )}
+          </AttachmentTransportProvider>
+        </div>
+      </section>
+    </PeopleNamesProvider>
   );
 }

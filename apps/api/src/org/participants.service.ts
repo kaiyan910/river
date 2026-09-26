@@ -12,6 +12,7 @@ import type {
   DirectoryEntry,
   Participant,
   ParticipantStatus,
+  PersonOption,
   SetPermissionsInput,
   UpdateParticipantInput,
 } from '@river/contracts';
@@ -23,7 +24,7 @@ import {
   permissionGrants,
   roleMembers,
 } from '@river/db';
-import { and, asc, eq, inArray, notInArray, type SQL } from 'drizzle-orm';
+import { and, asc, eq, ilike, inArray, isNull, notInArray, or, type SQL } from 'drizzle-orm';
 import { Logger } from 'nestjs-pino';
 import type { ActiveParticipant } from '../auth/active-participant.js';
 import type { Auth } from '../auth/create-auth.js';
@@ -57,6 +58,26 @@ export class ParticipantsService {
   async directory(): Promise<DirectoryEntry[]> {
     const people = await this.query();
     return people.map(({ id, name, email, status }) => ({ id, name, email, status }));
+  }
+
+  /**
+   * Form 的人員選擇器：依姓名或 email（不分大小寫、部分符合）搜尋沒有停用的 Participant，最多 20 位。
+   * 沒有關鍵字時依姓名列出前 20 位。
+   */
+  search(q: string): Promise<PersonOption[]> {
+    const pattern = `%${q.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
+    return this.db
+      .select({ id: participants.id, name: authUsers.name, email: authUsers.email })
+      .from(participants)
+      .innerJoin(authUsers, eq(authUsers.id, participants.userId))
+      .where(
+        and(
+          isNull(participants.deactivatedAt),
+          q ? or(ilike(authUsers.name, pattern), ilike(authUsers.email, pattern)) : undefined,
+        ),
+      )
+      .orderBy(asc(authUsers.name))
+      .limit(20);
   }
 
   async get(id: string): Promise<Participant> {

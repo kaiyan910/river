@@ -240,7 +240,7 @@ export function RequestContent({ request }: { request: RequestDetail }) {
                 · {form.name} · {section.submittedBy.name} 填寫於 {formatTime(section.submittedAt)}
               </span>
             </h3>
-            <FormDataView form={form} data={section.data} />
+            <FormDataView form={form} data={section.data} people={section.people} />
           </section>
         );
       })}

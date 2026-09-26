@@ -252,6 +252,7 @@ describe('表單設計器與開始表單', () => {
         nodeName: '開始',
         formId: 'trip',
         data: { destination: '高雄', days: 3, transport: '高鐵' },
+        people: [],
         submittedBy: { id: expect.any(String), name: '王小明' },
         submittedAt: expect.any(String),
       },

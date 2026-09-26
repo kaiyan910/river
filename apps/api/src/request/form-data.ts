@@ -1,7 +1,14 @@
 import { UnprocessableEntityException } from '@nestjs/common';
 import type { FormDataInput, FormRejected } from '@river/contracts';
-import { type Database, requestData } from '@river/db';
-import { type FormSchema, type StoredFormData, todayIn, validateFormData } from '@river/forms';
+import { type Database, participants, requestData } from '@river/db';
+import {
+  type FormSchema,
+  personRefs,
+  type StoredFormData,
+  todayIn,
+  validateFormData,
+} from '@river/forms';
+import { and, inArray, isNull } from 'drizzle-orm';
 import { bindAttachments } from '../attachment/bind-attachments.js';
 
 /** 某一步通過驗證、要存進 request_data 的內容。 */
@@ -12,19 +19,36 @@ export interface StepSubmission {
 
 /**
  * 依 Process Version 快照裡的 Form 驗證某一步送來的資料，回傳正規化後的內容。
- * 這一步沒有 Form 時不接受任何資料（回傳 null）。不合法時回 422，errors 的鍵是欄位代碼。
+ * 這一步沒有 Form 時不接受任何資料（回傳 null）。不合法時回 422，errors 的鍵是欄位代碼
+ * （明細表裡的欄是「代碼[第幾行].欄的代碼」）。
+ * 人員選擇器選到的人必須存在且沒有停用；這一項要查資料庫，所以不在共用的 formToZod 裡。
  */
-export function validateStepData(
+export async function validateStepData(
+  db: Pick<Database, 'select'>,
   form: FormSchema | null,
   data: FormDataInput | undefined,
-): StepSubmission | null {
+): Promise<StepSubmission | null> {
   if (!form) {
     if (data && Object.keys(data).length > 0) rejectFormData('這一步沒有表單，不能帶表單資料', {});
     return null;
   }
   const result = validateFormData(form, data ?? {}, { today: todayIn() });
-  if (!result.success)
-    rejectFormData(`表單有 ${Object.keys(result.errors).length} 個欄位需要修正`, result.errors);
+  const errors = result.success ? {} : result.errors;
+  if (result.success) {
+    const refs = personRefs(form, result.data);
+    const ids = [...new Set(refs.map((r) => r.id))];
+    const found = ids.length
+      ? await db
+          .select({ id: participants.id })
+          .from(participants)
+          .where(and(inArray(participants.id, ids), isNull(participants.deactivatedAt)))
+      : [];
+    const selectable = new Set(found.map((p) => p.id));
+    for (const ref of refs)
+      if (!selectable.has(ref.id)) errors[ref.path] ??= '找不到這個人，或帳號已停用';
+  }
+  if (!result.success || Object.keys(errors).length > 0)
+    rejectFormData(`表單有 ${Object.keys(errors).length} 個欄位需要修正`, errors);
   return { form, data: result.data };
 }
 

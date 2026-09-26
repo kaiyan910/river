@@ -996,11 +996,20 @@ function BranchesField({
   );
 }
 
-/** 流程裡有節點使用的 Form 的欄位代碼：JSONata 表達式用欄位代碼讀取這一輪填過的 Form 資料。 */
+/**
+ * 流程裡有節點使用的 Form 的欄位代碼：JSONata 表達式用欄位代碼讀取這一輪填過的 Form 資料。
+ * 明細表的欄寫成「明細表代碼.欄的代碼」，例如 $sum(items.amount) 加總每一行的金額。
+ */
 function fieldKeysOf(nodes: RFNode[], forms: FormSchema[]): string[] {
   const used = new Set(nodes.map((n) => formIdOf(n.data.node)));
   return [
-    ...new Set(forms.filter((f) => used.has(f.id)).flatMap((f) => f.fields.map((x) => x.key))),
+    ...new Set(
+      forms
+        .filter((f) => used.has(f.id))
+        .flatMap((f) =>
+          f.fields.flatMap((x) => [x.key, ...(x.columns ?? []).map((c) => `${x.key}.${c.key}`)]),
+        ),
+    ),
   ];
 }
 

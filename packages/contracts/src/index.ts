@@ -159,6 +159,15 @@ export const directoryEntrySchema = z.object({
 export type DirectoryEntry = z.infer<typeof directoryEntrySchema>;
 export const directorySchema = z.array(directoryEntrySchema);
 
+/** `GET /api/participants/search?q=`：Form 的人員選擇器用；依姓名或 email 搜尋。 */
+export const personSearchQuerySchema = z.object({ q: z.string().trim().max(100).default('') });
+export type PersonSearchQuery = z.infer<typeof personSearchQuerySchema>;
+
+/** 人員選擇器的一個候選人：沒有停用的 Participant，不含 Permission、Role 與 Manager。 */
+export const personOptionSchema = z.object({ id: z.string(), name: z.string(), email: z.email() });
+export type PersonOption = z.infer<typeof personOptionSchema>;
+export const personOptionListSchema = z.array(personOptionSchema);
+
 // ─── Process ─────────────────────────────────────────────────────────────
 
 const actorSchema = z.object({ id: z.string(), name: z.string() });
@@ -488,6 +497,8 @@ export const requestDataSectionSchema = z.object({
   nodeName: z.string(),
   formId: z.string(),
   data: formDataSchema,
+  /** 這一步的人員選擇器（包括明細表裡的）選到的人，唯讀顯示姓名用。 */
+  people: z.array(actorSchema),
   submittedBy: actorSchema,
   submittedAt: z.iso.datetime(),
 });
