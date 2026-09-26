@@ -1,5 +1,6 @@
 - 問題必須用正體中文(台灣)回答，除非是專用或技術名詞
 - 問題顯示形式必須是 TAB 形式，不要一次過垂直顯示所有問題
+- 所有 worktree 一定要放到 project root 的 `.worktree` 資料夾，完成後必須將 worktree 移除
 
 ## Agent skills
 
