@@ -15,6 +15,12 @@ export default defineConfig({
     // Caddy 在容器裡，要透過 host.docker.internal 連到這個 dev server。
     host: true,
     // 與 Caddy 相同：/api 轉給 api，其餘由 web 提供，瀏覽器看到的是同一個 origin。
-    proxy: { '/api': { target: 'http://localhost:3000', changeOrigin: false } },
+    // API_PROXY_TARGET：api 不在 3000 port 時使用（例如和開發環境並行跑 e2e）。
+    proxy: {
+      '/api': {
+        target: process.env.API_PROXY_TARGET ?? 'http://localhost:3000',
+        changeOrigin: false,
+      },
+    },
   },
 });

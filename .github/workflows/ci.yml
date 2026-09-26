@@ -24,3 +24,62 @@ jobs:
       # Temporal TestWorkflowEnvironment 會自動下載 test server。
       - run: bun run test
       - run: bun run build
+
+  # Playwright smoke：Docker Compose 啟動依賴服務與 Caddy，api、worker、web 以建置結果在 runner 上執行，
+  # 和 deploy/README.md 的本機開發環境同一套架構（Caddy：/api → :3000、其餘 → :5173）。
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      COMPOSE_FILE: deploy/compose.yaml
+    steps:
+      - uses: actions/checkout@v5
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.0
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: .node-version
+      - run: bun install --frozen-lockfile
+      # .env.example 的值足以在 CI 執行（Administrator 用 SEED_ADMIN_*，信件寄到 Mailpit）。
+      - run: cp .env.example .env
+      - run: docker compose up -d --wait
+      # auto-setup 在 cluster 健康之後才註冊 default namespace；worker 啟動前要先等到它。
+      - name: Wait for Temporal namespace
+        run: |
+          for i in $(seq 1 60); do
+            docker compose exec -T temporal sh -c \
+              'temporal operator namespace describe -n default --address $(hostname -i):7233' \
+              >/dev/null 2>&1 && exit 0
+            sleep 2
+          done
+          echo 'Temporal 的 default namespace 沒有就緒' && exit 1
+      - run: bun run build
+      - run: bun run db:migrate
+      - run: bun run seed:admin
+      - name: Start api, worker and web
+        run: |
+          mkdir -p logs
+          nohup bun run --cwd apps/api start > logs/api.log 2>&1 &
+          nohup bun run --cwd apps/worker start > logs/worker.log 2>&1 &
+          nohup bun run --cwd apps/web preview --port 5173 --strictPort --host > logs/web.log 2>&1 &
+          for url in http://localhost:8000/api/health http://localhost:8000/login; do
+            timeout 120 sh -c "until curl -fsS $url >/dev/null; do sleep 1; done"
+          done
+      - run: bunx playwright install --with-deps chromium
+        working-directory: apps/e2e
+      - run: bun run --cwd apps/e2e e2e
+      - if: failure()
+        run: |
+          tail -n 200 logs/*.log
+          docker compose logs --tail 200
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: |
+            apps/e2e/playwright-report/
+            apps/e2e/test-results/
+            logs/
+      - if: always()
+        run: docker compose down -v

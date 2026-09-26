@@ -1,0 +1,16 @@
+{
+  "name": "@river/e2e",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "e2e": "playwright test",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.63.0",
+    "@river/config": "workspace:*",
+    "@types/node": "^24",
+    "typescript": "~6.0.3"
+  }
+}

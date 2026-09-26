@@ -1,1 +1,1 @@
-export { createWorker, type WorkerDeps } from './worker.js';
+export { createWorker, type WorkerDeps, workflowOptions } from './worker.js';

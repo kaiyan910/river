@@ -8,3 +8,6 @@ coverage/
 !.env.example
 .DS_Store
 .worktree/
+# Playwright
+test-results/
+playwright-report/
