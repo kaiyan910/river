@@ -29,6 +29,7 @@ import {
   CircleAlert,
   CircleCheck,
   FileText,
+  History,
   KeyRound,
   Lock,
   Mail,
@@ -273,6 +274,7 @@ function ProcessEditor({ process, me }: { process: Process; me: MeResponse }) {
   const [publishing, setPublishing] = useState(false);
   const [editingAccess, setEditingAccess] = useState(false);
   const [editingSchedule, setEditingSchedule] = useState(false);
+  const [browsingHistory, setBrowsingHistory] = useState(false);
   const rf = useReactFlow();
   const canvasRef = useRef<HTMLDivElement>(null);
   const save = useSaveDraft();
@@ -392,16 +394,29 @@ function ProcessEditor({ process, me }: { process: Process; me: MeResponse }) {
             草稿
             {needsDraft && <span className="text-[0.8em] text-muted-foreground">（無）</span>}
           </TabButton>
-          {[...process.versions].reverse().map((v) => (
-            <TabButton key={v.version} active={tab === v.version} onClick={() => setTab(v.version)}>
-              <Lock size={11} aria-hidden />
-              <span className="font-mono">v{v.version}</span>
-              {v.version === current?.version && (
-                <span className="text-[0.8em] text-status-approved">目前</span>
-              )}
-            </TabButton>
-          ))}
+          {current && (
+            <VersionTab
+              version={current}
+              current
+              active={tab === current.version}
+              onSelect={setTab}
+            />
+          )}
+          {viewing && viewing !== current && (
+            <VersionTab version={viewing} active onSelect={setTab} />
+          )}
         </nav>
+        {process.versions.length > 1 && (
+          <Button
+            size="icon"
+            variant="ghost"
+            onClick={() => setBrowsingHistory(true)}
+            title="版本歷史"
+            aria-label="版本歷史"
+          >
+            <History size={15} aria-hidden />
+          </Button>
+        )}
         <button
           type="button"
           onClick={() => setEditingAccess(true)}
@@ -619,6 +634,17 @@ function ProcessEditor({ process, me }: { process: Process; me: MeResponse }) {
           onClose={() => setEditingSchedule(false)}
         />
       )}
+      {browsingHistory && (
+        <VersionHistoryDialog
+          process={process}
+          selected={tab}
+          onSelect={(version) => {
+            setTab(version);
+            setBrowsingHistory(false);
+          }}
+          onClose={() => setBrowsingHistory(false)}
+        />
+      )}
       {publishing && (
         <PublishDialog
           process={process}
@@ -687,6 +713,90 @@ function TabButton({
     >
       {children}
     </button>
+  );
+}
+
+function VersionTab({
+  version,
+  current,
+  active,
+  onSelect,
+}: {
+  version: ProcessVersion;
+  current?: boolean;
+  active: boolean;
+  onSelect: (version: number) => void;
+}) {
+  return (
+    <TabButton active={active} onClick={() => onSelect(version.version)}>
+      <Lock size={11} aria-hidden />
+      <span className="font-mono">v{version.version}</span>
+      {current && <span className="text-[0.8em] text-status-approved">目前</span>}
+    </TabButton>
+  );
+}
+
+/** 所有已發佈版本，新的在上面；選一個版本後以唯讀畫布開啟。 */
+function VersionHistoryDialog({
+  process,
+  selected,
+  onSelect,
+  onClose,
+}: {
+  process: Process;
+  selected: 'draft' | number;
+  onSelect: (version: number) => void;
+  onClose: () => void;
+}) {
+  const current = process.versions.at(-1);
+  return (
+    <div className="fixed inset-0 z-50 grid place-items-center bg-black/30 p-4">
+      <div
+        role="dialog"
+        aria-modal
+        aria-labelledby="history-title"
+        className="grid max-h-[80vh] w-full max-w-md grid-rows-[auto_1fr_auto] gap-3 rounded-xl border bg-card p-5 shadow-xl"
+      >
+        <h2 id="history-title" className="flex items-center gap-2 font-semibold text-[1.1em]">
+          <History size={18} aria-hidden /> 「{process.name}」的版本歷史
+        </h2>
+        <ul className="-mx-2 grid content-start gap-0.5 overflow-auto">
+          {[...process.versions].reverse().map((v) => (
+            <li key={v.version}>
+              <button
+                type="button"
+                onClick={() => onSelect(v.version)}
+                aria-current={selected === v.version || undefined}
+                className={cn(
+                  'grid w-full cursor-pointer grid-cols-[auto_1fr] items-baseline gap-x-3 rounded-lg px-2 py-2 text-left hover:bg-muted',
+                  selected === v.version && 'bg-muted',
+                )}
+              >
+                <span className="flex items-center gap-1 font-mono">
+                  <Lock size={11} aria-hidden />v{v.version}
+                </span>
+                <span className="min-w-0">
+                  <span className="text-[0.9em]">
+                    {v.publishedBy.name} · {formatTime(v.publishedAt)}
+                  </span>
+                  {v.version === current?.version && (
+                    <span className="ml-1.5 text-[0.8em] text-status-approved">目前</span>
+                  )}
+                  {v.note && (
+                    <span className="block truncate text-[0.85em] text-muted-foreground">
+                      {v.note}
+                    </span>
+                  )}
+                </span>
+              </button>
+            </li>
+          ))}
+        </ul>
+        <Button variant="ghost" className="justify-self-end" onClick={onClose}>
+          關閉
+        </Button>
+      </div>
+    </div>
   );
 }
 
