@@ -1,11 +1,25 @@
 import type { RequestDetail, RequestEvent, RequestSummary } from '@river/contracts';
-import { CheckCircle2, FileText, Loader2, RotateCcw, Search, XCircle } from 'lucide-react';
+import {
+  AlarmClock,
+  CheckCircle2,
+  FileText,
+  Loader2,
+  RotateCcw,
+  Search,
+  XCircle,
+} from 'lucide-react';
 import type { ReactNode } from 'react';
 import { FormDataView } from '@/components/form-fields';
 import { Avatar } from '@/components/people';
 import { Input } from '@/components/ui/input';
 import { branchLabel } from '@/lib/processes';
-import { assigneeLabel, FALLBACK_REASON_LABELS, isAdvancing, requestNumber } from '@/lib/requests';
+import {
+  assigneeLabel,
+  ESCALATION_FALLBACK_REASON_LABELS,
+  FALLBACK_REASON_LABELS,
+  isAdvancing,
+  requestNumber,
+} from '@/lib/requests';
 import { formatTime } from '@/lib/time';
 import { cn } from '@/lib/utils';
 
@@ -247,6 +261,14 @@ function describeEvent(e: RequestEvent): string {
       return `${e.actor?.name} 在「${e.task?.nodeName}」Return，退回給發起人修改`;
     case 'task.superseded':
       return `「${e.task?.nodeName}」的 Task 已作廢`;
+    case 'task.reminded':
+      return `「${e.task?.nodeName}」逾時未處理，已提醒 ${e.task && assigneeLabel(e.task.assignee)}`;
+    case 'task.escalated': {
+      const escalated = `「${e.task?.nodeName}」逾時未處理，原 Task 作廢，Escalation 轉給 ${e.task && assigneeLabel(e.task.assignee)}`;
+      return e.fallbackReason
+        ? `${escalated}（${ESCALATION_FALLBACK_REASON_LABELS[e.fallbackReason]}，轉給 Fallback Role）`
+        : escalated;
+    }
     case 'step.auto_approved':
       return `「${e.node?.name}」符合條件，自動核准`;
     case 'step.branch_chosen':
@@ -268,11 +290,14 @@ function describeEvent(e: RequestEvent): string {
 function SystemEventIcon({ type }: { type: RequestEvent['type'] }) {
   if (type === 'request.completed') return <CheckCircle2 size={14} aria-hidden />;
   if (type === 'task.superseded') return <XCircle size={14} aria-hidden />;
+  if (type === 'task.reminded' || type === 'task.escalated')
+    return <AlarmClock size={14} aria-hidden />;
   return <span className="size-1.5 rounded-full bg-current" />;
 }
 
 const EVENT_TONE: Partial<Record<RequestEvent['type'], string>> = {
   'task.returned': 'text-status-returned',
+  'task.escalated': 'text-status-returned',
   'request.resubmitted': 'text-status-open',
 };
 

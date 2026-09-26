@@ -717,4 +717,101 @@ describe('DSL 檢查', () => {
       ]);
     });
   });
+
+  describe('Reminder 與 Escalation', () => {
+    /** start → 主管審批（指定的指派對象與逾時設定）→ end */
+    const withTimeout = (settings: Partial<Extract<ProcessNode, { type: 'approval' }>>) => {
+      const dsl = minimal();
+      dsl.nodes[1] = { ...approval('manager'), ...settings } as ProcessNode;
+      return dsl;
+    };
+    const role = { type: 'role' as const, roleId: 'r-finance' };
+
+    it('指派給特定人：可以設定重複的 Reminder，Escalation 設定 Fallback Role', () => {
+      const dsl = withTimeout({
+        reminder: { afterHours: 24, repeat: true },
+        escalation: { afterHours: 72, target: null, fallbackRoleId: 'r-hr' },
+      });
+
+      expect(processDslSchema.parse(dsl)).toEqual(dsl);
+      expect(checkProcess(dsl)).toEqual([]);
+    });
+
+    it('指派給 Role 並指定 Escalation 目標（特定人或 Role）時沒有錯誤', () => {
+      for (const target of [{ type: 'participant' as const, participantId: 'p-9' }, role])
+        expect(
+          checkProcess(withTimeout({ assignee: role, escalation: { afterHours: 8, target } })),
+        ).toEqual([]);
+    });
+
+    it('指派給 Role 的節點設定 Escalation 時，必須指定目標', () => {
+      expect(
+        checkProcess(withTimeout({ assignee: role, escalation: { afterHours: 8, target: null } })),
+      ).toEqual([
+        {
+          nodeId: 'manager',
+          code: 'ESCALATION_NO_TARGET',
+          message: expect.stringContaining('審批 manager'),
+        },
+      ]);
+    });
+
+    it('指派給特定人的節點設定 Escalation 時，必須設定 Fallback Role（處理人沒有 Manager 時用）', () => {
+      expect(checkProcess(withTimeout({ escalation: { afterHours: 8 } }))).toEqual([
+        {
+          nodeId: 'manager',
+          code: 'ESCALATION_NO_FALLBACK_ROLE',
+          message: expect.stringContaining('審批 manager'),
+        },
+      ]);
+    });
+
+    it('指派給 Manager 的節點沿用節點的 Fallback Role，不需要另外設定', () => {
+      const dsl = withTimeout({
+        assignee: { type: 'manager', fallbackRoleId: 'r-hr' },
+        escalation: { afterHours: 8 },
+      });
+      expect(checkProcess(dsl)).toEqual([]);
+    });
+
+    it('填表節點一樣適用', () => {
+      const dsl: ProcessDsl = {
+        nodes: [
+          start(),
+          { ...formNode('register'), assignee: role, escalation: { afterHours: 8 } } as ProcessNode,
+          end(),
+        ],
+        edges: [edge('start', 'register'), edge('register', 'end')],
+        forms: [advance],
+      };
+      expect(checkProcess(dsl).map((e) => [e.code, e.nodeId])).toEqual([
+        ['ESCALATION_NO_TARGET', 'register'],
+      ]);
+    });
+
+    it('時數必須大於 0', () => {
+      const dsl = withTimeout({
+        reminder: { afterHours: 0, repeat: false },
+        escalation: { afterHours: -1, fallbackRoleId: 'r-hr' },
+      });
+      expect(checkProcess(dsl)).toEqual([
+        {
+          nodeId: 'manager',
+          code: 'TIMEOUT_INVALID_HOURS',
+          message: expect.stringContaining('Reminder'),
+        },
+        {
+          nodeId: 'manager',
+          code: 'TIMEOUT_INVALID_HOURS',
+          message: expect.stringContaining('Escalation'),
+        },
+      ]);
+    });
+
+    it('舊的 DSL 沒有逾時設定，視同沒有設定', () => {
+      const dsl = minimal();
+      expect(processDslSchema.parse(dsl).nodes[1]).not.toHaveProperty('reminder');
+      expect(checkProcess(dsl)).toEqual([]);
+    });
+  });
 });

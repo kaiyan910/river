@@ -18,12 +18,18 @@ import {
   setHandler,
   uuid4,
 } from '@temporalio/workflow';
-import type { Activities, CreateTaskInput, NotifyInput } from '../activities.js';
+import type { Activities, CreateTaskInput, EscalationTo, NotifyInput } from '../activities.js';
 
-const { loadProcessVersion, createTask, evaluateCondition, evaluateAutoApproval, completeRequest } =
-  proxyActivities<Activities>({
-    startToCloseTimeout: '30 seconds',
-  });
+const {
+  loadProcessVersion,
+  createTask,
+  evaluateCondition,
+  evaluateAutoApproval,
+  escalateTask,
+  completeRequest,
+} = proxyActivities<Activities>({
+  startToCloseTimeout: '30 seconds',
+});
 
 /**
  * 寄信：寄信服務故障時重試幾次就放棄，不讓 Request 卡住；通知與 Email 節點都是盡力而為。
@@ -49,6 +55,14 @@ async function notify(input: NotifyInput): Promise<void> {
   }
 }
 
+/**
+ * 人工節點的 Reminder 與 Escalation 在等待 Task 時多了 durable timer 與 activity：
+ * 以 patched() 保護，這個版本之前開始的 workflow 重播時照舊只等 Task 完成。
+ */
+const TIMEOUTS_PATCH = 'reminder-escalation';
+
+const HOUR = 60 * 60 * 1000;
+
 export const taskCompletedSignal = defineSignal<[TaskCompletedSignal]>(TASK_COMPLETED_SIGNAL);
 export const resubmittedSignal = defineSignal<[ResubmittedSignal]>(RESUBMITTED_SIGNAL);
 export const withdrawSignal = defineSignal(WITHDRAW_SIGNAL);
@@ -63,6 +77,8 @@ export const withdrawSignal = defineSignal(WITHDRAW_SIGNAL);
  * 並行分支（parallelSplit）的各條分支同時走，每一條都走到配對的 parallelJoin 後才繼續（見 walk）。
  * Email 節點交給 sendEmail activity 寄出後直接往下走。
  * 新 Task 寄信給處理人，Return 與完成寄信給發起人（見 notify）；信件只有 Request 標題、Process 名稱與連結。
+ * 人工節點設定了 Reminder 或 Escalation 時，等待 Task 期間用 durable timer 計時（見 waitForTask）：
+ * Reminder 寄信提醒目前的處理人；Escalation 把 Task 轉給新的處理人，之後改等新的 Task。Task 完成時 timer 一併取消。
  *
  * Return、重新送出與 Withdraw 的狀態變化都由 API 在同一個 transaction 寫進 Postgres，workflow 只負責流轉：
  * - Task 被 Return：停下來，等發起人重新送出或 Withdraw；並行的其他分支也一起停下來。
@@ -206,8 +222,8 @@ export async function interpretProcess({
           return undefined;
         }
         await notify({ requestId, event: 'taskCreated', taskId });
-        await condition(() => outcomes.has(taskId) || stopped());
-        if (outcomes.get(taskId) === 'returned') {
+        const handled = await waitForTask(node, taskId);
+        if (outcomes.get(handled) === 'returned') {
           await notify({ requestId, event: 'returned' });
           await condition(interrupted);
         }
@@ -215,6 +231,65 @@ export async function interpretProcess({
       if (!stopped()) node = next(node);
     }
     return node?.type === 'parallelJoin' && !stopped() ? node : undefined;
+  };
+
+  /**
+   * 等 Task 完成（或 Request 停下來），回傳最後等的 Task ID（Escalation 後是新的 Task）。
+   * 沒有逾時設定的節點和原本一樣只等 Task 完成。
+   * 有設定時從 Task 建立起計時：
+   * - Reminder：afterHours 小時後寄信給目前的處理人；repeat 時每隔 afterHours 小時再寄一次。
+   * - Escalation：afterHours 小時後交給 escalateTask 轉給新的處理人，只轉一次；轉交後 Reminder 為新的處理人重新計時。
+   *   Task 剛好被處理、或 Request 已經停下來時 escalateTask 不轉交，繼續等原本的 Task。
+   * Task 完成時 condition 直接返回，還沒到期的 timer 不會再觸發。
+   */
+  const waitForTask = async (
+    node: Extract<ProcessNode, { type: 'approval' | 'form' }>,
+    firstTaskId: string,
+  ): Promise<string> => {
+    let taskId = firstTaskId;
+    const done = () => outcomes.has(taskId) || stopped();
+    const { reminder } = node;
+    const escalateTo = escalationOf(node);
+    if ((!reminder && !escalateTo) || !patched(TIMEOUTS_PATCH)) {
+      await condition(done);
+      return taskId;
+    }
+    const reminderEvery = reminder && reminder.afterHours > 0 ? reminder.afterHours * HOUR : null;
+    let remindAt = reminderEvery ? Date.now() + reminderEvery : Infinity;
+    let reminders = 0;
+    let escalateAt = escalateTo ? Date.now() + escalateTo.afterHours * HOUR : Infinity;
+
+    while (!done()) {
+      const dueAt = Math.min(remindAt, escalateAt);
+      if (dueAt === Infinity) {
+        await condition(done);
+        break;
+      }
+      if (await condition(done, Math.max(dueAt - Date.now(), 1))) break;
+
+      if (escalateTo && Date.now() >= escalateAt) {
+        escalateAt = Infinity;
+        const newTaskId = uuid4();
+        const result = await escalateTask({ requestId, taskId, newTaskId, to: escalateTo.to });
+        if (result === 'escalated') {
+          taskId = newTaskId;
+          reminders = 0;
+          remindAt = reminderEvery ? Date.now() + reminderEvery : Infinity;
+          await notify({ requestId, event: 'taskEscalated', taskId });
+          continue;
+        }
+      }
+      if (reminderEvery && Date.now() >= remindAt) {
+        reminders += 1;
+        remindAt = reminder?.repeat ? remindAt + reminderEvery : Infinity;
+        try {
+          await bestEffortMail.sendReminder({ requestId, taskId, sequence: reminders });
+        } catch (error) {
+          log.warn('Reminder 寄送失敗，略過', { requestId, taskId, error });
+        }
+      }
+    }
+    return taskId;
   };
 
   const last = await walk(dsl.nodes.find((n) => n.type === 'start'));
@@ -232,6 +307,36 @@ export async function interpretProcess({
   if (notRunning) return;
   await completeRequest(requestId);
   await notify({ requestId, event: 'completed' });
+}
+
+/**
+ * 節點的 Escalation 設定轉成時限與 escalateTask 的對象；沒有設定、時數不合理或缺少必要設定時為 null（不轉交）。
+ * 發佈前檢查（TIMEOUT_INVALID_HOURS、ESCALATION_NO_TARGET、ESCALATION_NO_FALLBACK_ROLE）已經擋下，
+ * Escalation 失敗只會讓 Task 留在原處理人手上，所以不讓 workflow 失敗。
+ */
+function escalationOf(
+  node: Extract<ProcessNode, { type: 'approval' | 'form' }>,
+): { afterHours: number; to: EscalationTo } | null {
+  const { escalation, assignee } = node;
+  if (!escalation || !assignee || !(escalation.afterHours > 0)) return null;
+  const { afterHours, target, fallbackRoleId } = escalation;
+  switch (assignee.type) {
+    case 'role':
+      if (!target) return null;
+      return {
+        afterHours,
+        to:
+          target.type === 'participant'
+            ? { assigneeId: target.participantId }
+            : { roleId: target.roleId },
+      };
+    case 'participant':
+      return fallbackRoleId ? { afterHours, to: { handlerManager: { fallbackRoleId } } } : null;
+    case 'manager':
+      return assignee.fallbackRoleId
+        ? { afterHours, to: { handlerManager: { fallbackRoleId: assignee.fallbackRoleId } } }
+        : null;
+  }
 }
 
 /**

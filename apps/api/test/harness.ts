@@ -72,6 +72,8 @@ export interface TestApp {
   emails: RecordingEmailSender;
   /** 直接對 Temporal 送 Signal，模擬 API 重試或重複送出。 */
   temporal: Client;
+  /** 快轉 Temporal 的時間（time skipping），讓 Reminder、Escalation 等 durable timer 到期。 */
+  skipTime(duration: Parameters<TestWorkflowEnvironment['sleep']>[0]): Promise<void>;
   provisionParticipant(input: ProvisionParticipantInput): Promise<{ participantId: string }>;
   /** 用 email + 密碼登入，回傳帶著 session cookie 的 client；失敗時丟出錯誤。 */
   signIn(email: string, password: string): Promise<ApiClient>;
@@ -123,6 +125,7 @@ export async function startTestApp(): Promise<TestApp> {
     anonymous,
     emails,
     temporal: temporal.client,
+    skipTime: (duration) => temporal.sleep(duration),
     provisionParticipant: (input) => provisionParticipant(auth, database.db, input),
     async signIn(email, password) {
       const res = await anonymous.post('/api/auth/sign-in/email', { email, password });

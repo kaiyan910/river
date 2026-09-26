@@ -206,7 +206,7 @@ export const requests = pgTable(
   (t) => [index().on(t.initiatorId)],
 );
 
-/** superseded：因為 Return 或 Withdraw 而作廢，不再需要處理。 */
+/** superseded：因為 Return、Withdraw 或 Escalation 而作廢，不再需要處理。 */
 export const TASK_STATUSES = ['open', 'completed', 'superseded'] as const;
 export type TaskStatus = (typeof TASK_STATUSES)[number];
 /** 審批 Task 的結果是 approved 或 returned；填表 Task 送出後是 submitted。 */
@@ -257,6 +257,8 @@ export const REQUEST_EVENT_TYPES = [
   'task.completed',
   'task.returned',
   'task.superseded',
+  'task.reminded',
+  'task.escalated',
   'step.auto_approved',
   'step.branch_chosen',
   'step.email_sent',
@@ -283,7 +285,10 @@ export const requestEvents = pgTable(
     actorId: uuid('actor_id').references(() => participants.id),
     taskId: uuid('task_id').references(() => tasks.id),
     comment: text('comment'),
-    /** task.created：Task 因為找不到有效的 Manager 而改派給 Fallback Role 時的原因；其他情況為 null。 */
+    /**
+     * task.created、task.escalated：Task 因為找不到有效的 Manager 而改派給 Fallback Role 時的原因；其他情況為 null。
+     * task.escalated 的 taskId 是 Escalation 後新建立的 Task（原 Task 已經 superseded）。
+     */
     fallbackReason: text('fallback_reason').$type<FallbackReason>(),
     /**
      * step.auto_approved：自動核准的審批節點；step.branch_chosen：做出判斷的條件節點；

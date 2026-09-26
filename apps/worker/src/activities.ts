@@ -13,7 +13,7 @@ import {
 import { fillEmailTemplate, type ProcessDsl } from '@river/dsl';
 import { chooseBranch, shouldAutoApprove } from '@river/dsl/branch';
 import { ApplicationFailure, log } from '@temporalio/activity';
-import { and, asc, desc, eq, gt, inArray, or, sql } from 'drizzle-orm';
+import { and, asc, count, desc, eq, gt, inArray, or, sql } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
 import {
   activeEmails,
@@ -65,8 +65,40 @@ export interface EvaluateAutoApprovalInput {
  * 只帶 ID；信件內容由 activity 從 Postgres 讀取，只包含 Request 標題、Process 名稱與連結。
  */
 export type NotifyInput =
-  | { requestId: string; event: 'taskCreated'; taskId: string }
+  | { requestId: string; event: 'taskCreated' | 'taskEscalated'; taskId: string }
   | { requestId: string; event: 'returned' | 'completed' };
+
+export interface SendReminderInput {
+  requestId: string;
+  taskId: string;
+  /** 這個 Task 的第幾次 Reminder（從 1 開始）；重試時用來判斷是否已經寄過。 */
+  sequence: number;
+}
+
+/**
+ * Escalation 的對象，由 workflow 依節點設定決定：
+ * - 指派給 Role 的節點：Designer 指定的特定人（assigneeId）或 Role（roleId）；
+ * - 指派給特定人或 Manager 的節點：目前處理人的 Manager，找不到有效的 Manager 時轉給 Fallback Role。
+ */
+export type EscalationTo =
+  | { assigneeId: string }
+  | { roleId: string }
+  | { handlerManager: { fallbackRoleId: string } };
+
+export interface EscalateTaskInput {
+  requestId: string;
+  /** 逾時的 Task。 */
+  taskId: string;
+  /** 由 workflow 產生的新 Task ID；activity 重試時用同一個 ID，Task 與事件都不會重複。 */
+  newTaskId: string;
+  to: EscalationTo;
+}
+
+/**
+ * escalated：原 Task 已作廢，新的 Task 已建立；skipped：沒有轉交（Task 已經處理、Request 已經不是 running，
+ * 或找不到和目前不同的處理人），workflow 繼續等原本的 Task。
+ */
+export type EscalateTaskResult = 'escalated' | 'skipped';
 
 export interface SendEmailInput {
   requestId: string;
@@ -243,20 +275,14 @@ export function createActivities(db: Database, notification: NotificationDeps) {
       if (!request) throw ApplicationFailure.nonRetryable(`找不到 Request ${input.requestId}`);
       const props = { requestTitle: request.title, processName: request.processName };
 
-      if (input.event === 'taskCreated') {
-        const [task] = await db
-          .select({ status: tasks.status, assigneeId: tasks.assigneeId, roleId: tasks.roleId })
-          .from(tasks)
-          .where(eq(tasks.id, input.taskId));
-        if (task?.status !== 'open') return;
-        const to = task.roleId
-          ? await roleMemberEmails(db, task.roleId)
-          : await activeEmails(db, task.assigneeId ? [task.assigneeId] : []);
+      if (input.event === 'taskCreated' || input.event === 'taskEscalated') {
+        const to = await openTaskHandlerEmails(db, input.taskId);
+        if (!to) return;
         await sendToEach(
           notification,
           to,
           { ...props, url: taskUrl(notification.appUrl, input.taskId) },
-          { kind: 'taskCreated' },
+          { kind: input.event === 'taskCreated' ? 'taskCreated' : 'escalated' },
         );
         return;
       }
@@ -328,6 +354,120 @@ export function createActivities(db: Database, notification: NotificationDeps) {
       });
     },
 
+    /**
+     * Reminder：寄信提醒 Task 目前的處理人（指派給 Role 時寄給每一位成員），不改變 Task 由誰負責。
+     * 寄出後，Task 仍是 open 才寫入 task.reminded 事件。Task 已經處理或作廢、Request 已經不是 running 時不寄。
+     * 重試時，這個 Task 已經有 sequence 筆 task.reminded 就不再寄；寄出後、寫入前失敗的話會重複寄出，但不會漏寄。
+     */
+    async sendReminder(input: SendReminderInput): Promise<void> {
+      if ((await reminderCount(db, input.taskId)) >= input.sequence) return;
+      const request = await requestSummary(db, input.requestId);
+      if (!request) throw ApplicationFailure.nonRetryable(`找不到 Request ${input.requestId}`);
+      if (request.status !== 'running') return;
+      const to = await openTaskHandlerEmails(db, input.taskId);
+      if (!to) return;
+      await sendToEach(
+        notification,
+        to,
+        {
+          requestTitle: request.title,
+          processName: request.processName,
+          url: taskUrl(notification.appUrl, input.taskId),
+        },
+        { kind: 'reminder' },
+      );
+
+      await db.transaction(async (tx) => {
+        const [task] = await tx
+          .select({ status: tasks.status })
+          .from(tasks)
+          .where(eq(tasks.id, input.taskId))
+          .for('update');
+        if (task?.status !== 'open') return;
+        if ((await reminderCount(tx, input.taskId)) >= input.sequence) return;
+        await tx.insert(requestEvents).values({
+          requestId: input.requestId,
+          type: 'task.reminded',
+          taskId: input.taskId,
+        });
+      });
+    },
+
+    /**
+     * Escalation：原 Task 變成 superseded，為新的處理人建立 Task（同一個節點、同一輪），寫入 task.escalated 事件。
+     * 絕不會自動核准：只是換人處理。
+     * 先鎖住 Request 再鎖住 Task（與 API 的 Return、Withdraw、完成 Task 同樣的順序）：
+     * Request 已經不是 running、或 Task 已經不是 open（剛好有人處理了）時不轉交。
+     * 新的處理人和目前相同（例如 Task 已經在 Fallback Role 手上）時也不轉交。
+     * 重試時新的 Task 已經建立，就直接回傳 escalated。
+     */
+    async escalateTask(input: EscalateTaskInput): Promise<EscalateTaskResult> {
+      return db.transaction(async (tx) => {
+        const [request] = await tx
+          .select({ status: requests.status })
+          .from(requests)
+          .where(eq(requests.id, input.requestId))
+          .for('update');
+        if (!request) throw new Error(`找不到 Request ${input.requestId}`);
+        const [existing] = await tx
+          .select({ id: tasks.id })
+          .from(tasks)
+          .where(eq(tasks.id, input.newTaskId));
+        if (existing) return 'escalated';
+        if (request.status !== 'running') return 'skipped';
+        const [task] = await tx
+          .select()
+          .from(tasks)
+          .where(eq(tasks.id, input.taskId))
+          .for('update');
+        if (task?.status !== 'open') return 'skipped';
+
+        const assignment: Assignment =
+          'handlerManager' in input.to
+            ? task.assigneeId
+              ? await resolveManager(tx, task.assigneeId, input.to.handlerManager.fallbackRoleId)
+              : // 處理人是 Role（例如已經改派給 Fallback Role），沒有 Manager 可以轉。
+                {
+                  assigneeId: null,
+                  roleId: input.to.handlerManager.fallbackRoleId,
+                  fallbackReason: 'no_manager',
+                }
+            : {
+                assigneeId: 'assigneeId' in input.to ? input.to.assigneeId : null,
+                roleId: 'roleId' in input.to ? input.to.roleId : null,
+              };
+        if (assignment.assigneeId === task.assigneeId && assignment.roleId === task.roleId) {
+          log.info('Escalation 找不到和目前不同的處理人，不轉交', {
+            requestId: input.requestId,
+            taskId: input.taskId,
+          });
+          return 'skipped';
+        }
+
+        await tx
+          .update(tasks)
+          .set({ status: 'superseded', version: sql`${tasks.version} + 1` })
+          .where(eq(tasks.id, task.id));
+        await tx.insert(tasks).values({
+          id: input.newTaskId,
+          requestId: task.requestId,
+          nodeId: task.nodeId,
+          nodeName: task.nodeName,
+          kind: task.kind,
+          round: task.round,
+          assigneeId: assignment.assigneeId,
+          roleId: assignment.roleId,
+        });
+        await tx.insert(requestEvents).values({
+          requestId: input.requestId,
+          type: 'task.escalated',
+          taskId: input.newTaskId,
+          fallbackReason: assignment.fallbackReason ?? null,
+        });
+        return 'escalated';
+      });
+    },
+
     async completeRequest(requestId: string): Promise<void> {
       await db.transaction(async (tx) => {
         const [completed] = await tx
@@ -350,6 +490,27 @@ interface Assignment {
   assigneeId: string | null;
   roleId: string | null;
   fallbackReason?: FallbackReason;
+}
+
+/** open 的 Task 目前處理人的 email（指派給 Role 時是每一位成員）；Task 已經處理或作廢時為 undefined。 */
+async function openTaskHandlerEmails(db: Database, taskId: string): Promise<string[] | undefined> {
+  const [task] = await db
+    .select({ status: tasks.status, assigneeId: tasks.assigneeId, roleId: tasks.roleId })
+    .from(tasks)
+    .where(eq(tasks.id, taskId));
+  if (task?.status !== 'open') return undefined;
+  return task.roleId
+    ? roleMemberEmails(db, task.roleId)
+    : activeEmails(db, task.assigneeId ? [task.assigneeId] : []);
+}
+
+/** 這個 Task 已經寄過幾次 Reminder。 */
+async function reminderCount(db: Database | Tx, taskId: string): Promise<number> {
+  const [row] = await db
+    .select({ count: count() })
+    .from(requestEvents)
+    .where(and(eq(requestEvents.taskId, taskId), eq(requestEvents.type, 'task.reminded')));
+  return row?.count ?? 0;
 }
 
 /** JSONata 的錯誤代碼（例如 T2001）；log 只記這個，不記錄可能含有 Form 資料的錯誤訊息。 */
@@ -459,17 +620,20 @@ async function loadRound(
   return { dsl: version.dsl, data: Object.assign({}, ...rows.map((r) => r.data)) };
 }
 
-/** 發起人有有效（沒有停用）的 Manager 時指派給 Manager，否則改派給 Fallback Role 並記下原因。 */
+/**
+ * 這位 Participant（發起人，或 Escalation 時目前的處理人）有有效（沒有停用）的 Manager 時指派給 Manager，
+ * 否則改派給 Fallback Role 並記下原因。
+ */
 async function resolveManager(
   tx: Tx,
-  initiatorId: string,
+  participantId: string,
   fallbackRoleId: string,
 ): Promise<Assignment> {
   const [row] = await tx
     .select({ managerId: participants.managerId, deactivatedAt: managers.deactivatedAt })
     .from(participants)
     .leftJoin(managers, eq(managers.id, participants.managerId))
-    .where(eq(participants.id, initiatorId));
+    .where(eq(participants.id, participantId));
   if (row?.managerId && !row.deactivatedAt) return { assigneeId: row.managerId, roleId: null };
   return {
     assigneeId: null,

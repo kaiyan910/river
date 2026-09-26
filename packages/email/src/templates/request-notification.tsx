@@ -17,12 +17,14 @@ import type { EmailMessage } from '../email-sender.js';
 /**
  * 與 Request 有關的通知：
  * - taskCreated：有新的 Task，寄給處理人（指派給 Role 時寄給每一位成員）
+ * - reminder：Task 逾時還沒處理（Reminder），寄給目前的處理人
+ * - escalated：別人的 Task 逾時未處理，Escalation 轉給新的處理人
  * - returned：Request 被 Return，寄給發起人
  * - completed：Request 完成，寄給發起人
  * - custom：流程裡的 Email 節點，主旨與內文由 Designer 的範本產生（已經代入變數）
  */
 export type RequestNotification =
-  | { kind: 'taskCreated' | 'returned' | 'completed' }
+  | { kind: 'taskCreated' | 'reminder' | 'escalated' | 'returned' | 'completed' }
   | { kind: 'custom'; subject: string; message: string };
 
 /**
@@ -54,6 +56,22 @@ function contentOf({ requestTitle, processName, notification }: RequestNotificat
         preview: `${request}需要你處理`,
         heading: '你有一個新的待辦',
         paragraphs: [`${request}需要你處理。`],
+        action: '前往處理',
+      };
+    case 'reminder':
+      return {
+        subject: `待辦提醒：${requestTitle}`,
+        preview: `${request}還在等你處理`,
+        heading: '你有一個待辦還沒處理',
+        paragraphs: [`${request}還在等你處理，請盡快處理。`],
+        action: '前往處理',
+      };
+    case 'escalated':
+      return {
+        subject: `逾時轉交的待辦：${requestTitle}`,
+        preview: `${request}逾時未處理，已轉給你`,
+        heading: '有一個逾時的待辦轉給你',
+        paragraphs: [`${request}在原處理人那裡逾時未處理，已轉給你處理。`],
         action: '前往處理',
       };
     case 'returned':

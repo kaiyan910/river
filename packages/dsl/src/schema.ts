@@ -40,6 +40,34 @@ export type Assignee = z.infer<typeof assigneeSchema>;
 /** Task 實際的指派對象：特定 Participant 或 Role。指派給 Manager 的節點在建立 Task 時才決定是哪一種。 */
 export type TaskAssignee = Extract<Assignee, { type: 'participant' | 'role' }>;
 
+/**
+ * 人工節點的 Reminder：Task 建立後 afterHours 小時還沒處理，寄信提醒目前的處理人；repeat 時每隔 afterHours 小時再提醒一次。
+ * 不會改變 Task 由誰負責。草稿中時數可以不合理（例如 0），發佈前由檢查器擋下。
+ */
+export const reminderSchema = z.object({ afterHours: z.number(), repeat: z.boolean() });
+export type Reminder = z.infer<typeof reminderSchema>;
+
+/**
+ * 人工節點的 Escalation：Task 建立後 afterHours 小時還沒處理，原 Task 作廢（superseded），為新的處理人建立 Task。
+ * 絕不會自動核准。新的處理人依節點的指派對象決定：
+ * - 指派給 Role：轉給 target（特定人或 Role），發佈前必須指定。
+ * - 指派給特定人或發起人的 Manager：轉給目前處理人的 Manager；處理人沒有有效的 Manager 時轉給 Fallback Role。
+ *   指派給 Manager 的節點沿用節點上的 Fallback Role；指派給特定人的節點用這裡的 fallbackRoleId，發佈前必須設定。
+ * 草稿中切換指派方式時，用不到的欄位可以留著，不影響執行。
+ */
+export const escalationSchema = z.object({
+  afterHours: z.number(),
+  target: z.discriminatedUnion('type', [participantAssigneeSchema, roleAssigneeSchema]).nullish(),
+  fallbackRoleId: z.string().min(1).nullish(),
+});
+export type Escalation = z.infer<typeof escalationSchema>;
+
+/** 審批與填表節點共用的逾時設定；舊的 DSL 沒有這些欄位，視同沒有設定。 */
+const timeoutSettings = {
+  reminder: reminderSchema.nullish(),
+  escalation: escalationSchema.nullish(),
+};
+
 /** 節點使用的 Form（同一份 DSL 裡 forms 的 id）；草稿中可以還沒指定。 */
 const formRefSchema = z.string().min(1).nullish();
 
@@ -61,13 +89,14 @@ export type AutoApprove = z.infer<typeof autoApproveSchema>;
 /**
  * 審批節點；草稿中可以還沒指派（null），發佈前由檢查器擋下。
  * 設定了 Auto-approval 的節點仍然必須指派審批人：條件不成立或無法判斷時交給審批人。
- * 舊的 DSL 沒有 autoApprove，視同沒有設定。
+ * 舊的 DSL 沒有 autoApprove，視同沒有設定。逾時永遠不會觸發 Auto-approval（見 escalationSchema）。
  */
 export const approvalNodeSchema = z.object({
   ...nodeBase,
   type: z.literal('approval'),
   assignee: assigneeSchema.nullable(),
   autoApprove: autoApproveSchema.nullish(),
+  ...timeoutSettings,
 });
 
 /** 填表節點：指派一位 Participant、一個 Role 或發起人的 Manager 填一份 Form；發佈前兩者都必須設定。 */
@@ -76,6 +105,7 @@ export const formNodeSchema = z.object({
   type: z.literal('form'),
   formId: formRefSchema,
   assignee: assigneeSchema.nullable(),
+  ...timeoutSettings,
 });
 
 /** 條件節點：本身沒有設定，分支條件放在出邊上（見 branchSchema）。 */

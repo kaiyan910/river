@@ -14,6 +14,9 @@ export const DSL_ERROR_CODES = [
   'FORM_NODE_NO_FORM',
   'FORM_NODE_NO_ASSIGNEE',
   'MANAGER_NO_FALLBACK_ROLE',
+  'TIMEOUT_INVALID_HOURS',
+  'ESCALATION_NO_TARGET',
+  'ESCALATION_NO_FALLBACK_ROLE',
   'NODE_FORM_MISSING',
   'CONDITION_NO_DEFAULT',
   'CONDITION_MULTIPLE_DEFAULTS',
@@ -133,6 +136,34 @@ export function checkProcess(dsl: ProcessDsl): DslError[] {
         code: 'MANAGER_NO_FALLBACK_ROLE',
         message: `「${node.name}」指派給發起人的 Manager，必須設定 Fallback Role。`,
       });
+
+  for (const node of dsl.nodes) {
+    if (node.type !== 'approval' && node.type !== 'form') continue;
+    const { reminder, escalation } = node;
+    for (const [label, timeout] of [
+      ['Reminder', reminder],
+      ['Escalation', escalation],
+    ] as const)
+      if (timeout && !(Number.isFinite(timeout.afterHours) && timeout.afterHours > 0))
+        errors.push({
+          nodeId: node.id,
+          code: 'TIMEOUT_INVALID_HOURS',
+          message: `「${node.name}」的 ${label} 時數必須大於 0。`,
+        });
+    if (!escalation) continue;
+    if (node.assignee?.type === 'role' && !escalation.target)
+      errors.push({
+        nodeId: node.id,
+        code: 'ESCALATION_NO_TARGET',
+        message: `「${node.name}」指派給 Role，設定 Escalation 時必須指定要轉給誰。`,
+      });
+    if (node.assignee?.type === 'participant' && !escalation.fallbackRoleId)
+      errors.push({
+        nodeId: node.id,
+        code: 'ESCALATION_NO_FALLBACK_ROLE',
+        message: `「${node.name}」設定了 Escalation，必須設定 Fallback Role（處理人沒有 Manager 時轉給它）。`,
+      });
+  }
 
   for (const node of dsl.nodes) {
     if (node.type !== 'condition') continue;

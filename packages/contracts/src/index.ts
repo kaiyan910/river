@@ -272,7 +272,7 @@ export type ProcessFlow = z.infer<typeof processFlowSchema>;
 export const requestStatusSchema = z.enum(['running', 'returned', 'completed', 'withdrawn']);
 export type RequestStatus = z.infer<typeof requestStatusSchema>;
 
-/** superseded：因為 Return 或 Withdraw 而作廢，不再需要處理。 */
+/** superseded：因為 Return、Withdraw 或 Escalation 而作廢，不再需要處理。 */
 export const taskStatusSchema = z.enum(['open', 'completed', 'superseded']);
 export type TaskStatus = z.infer<typeof taskStatusSchema>;
 
@@ -367,6 +367,8 @@ export const requestEventTypeSchema = z.enum([
   'task.completed',
   'task.returned',
   'task.superseded',
+  'task.reminded',
+  'task.escalated',
   'step.auto_approved',
   'step.branch_chosen',
   'step.email_sent',
@@ -396,7 +398,11 @@ export const requestEventSchema = z.object({
     })
     .nullable(),
   comment: z.string().nullable(),
-  /** task.created：發起人沒有 Manager 或 Manager 已停用，Task 改派給 Fallback Role 時的原因；其他為 null。 */
+  /**
+   * task.created：發起人沒有 Manager 或 Manager 已停用，Task 改派給 Fallback Role 時的原因；
+   * task.escalated：處理人沒有 Manager 或 Manager 已停用，Escalation 改轉給 Fallback Role 時的原因；其他為 null。
+   * task.reminded 的 task 是被提醒的 Task；task.escalated 的 task 是 Escalation 後新建立的 Task（原 Task 已作廢）。
+   */
   fallbackReason: fallbackReasonSchema.nullable(),
   /**
    * step.auto_approved：自動核准的審批步驟；step.branch_chosen：做出判斷的條件節點；step.email_sent：寄出信件的 Email 節點。

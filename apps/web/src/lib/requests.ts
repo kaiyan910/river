@@ -156,6 +156,12 @@ export const FALLBACK_REASON_LABELS: Record<FallbackReason, string> = {
   manager_deactivated: '發起人的 Manager 已停用',
 };
 
+/** Escalation 時找不到處理人的 Manager、改轉給 Fallback Role 的原因。 */
+export const ESCALATION_FALLBACK_REASON_LABELS: Record<FallbackReason, string> = {
+  no_manager: '處理人沒有 Manager',
+  manager_deactivated: '處理人的 Manager 已停用',
+};
+
 /** R-000042 */
 export function requestNumber(n: number): string {
   return `R-${String(n).padStart(6, '0')}`;

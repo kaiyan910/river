@@ -5,6 +5,7 @@ import {
   type CanvasNodeData,
   checkProcess,
   type EmailRecipient,
+  type Escalation,
   fromCanvas,
   isSystemNode,
   NODE_TYPE_LABELS,
@@ -12,6 +13,7 @@ import {
   type NodeType,
   type ProcessDsl,
   type ProcessNode,
+  type Reminder,
   toCanvas,
 } from '@river/dsl';
 import type { FormSchema } from '@river/forms';
@@ -30,6 +32,7 @@ import {
   Position,
 } from '@xyflow/react';
 import {
+  AlarmClock,
   CirclePlay,
   CircleStop,
   ClipboardPen,
@@ -286,6 +289,9 @@ function NodeCard({ data, selected, type }: NodeProps<RFNode>) {
           <span className="truncate">條件成立時自動核准</span>
         </div>
       )}
+      {(data.node.type === 'approval' || data.node.type === 'form') && (
+        <TimeoutLine reminder={data.node.reminder} escalation={data.node.escalation} />
+      )}
       {type === 'condition' && (
         <div className="mt-1 text-[0.85em] text-muted-foreground">依 Form 資料走不同的出邊</div>
       )}
@@ -342,6 +348,27 @@ function AssigneeLine({ assignee, missing }: { assignee: Assignee | null; missin
 }
 
 /** Email 節點的收件對象。 */
+/** 人工節點的逾時設定摘要，例如「24 小時提醒・72 小時 Escalation」。 */
+function TimeoutLine({
+  reminder,
+  escalation,
+}: {
+  reminder?: Reminder | null;
+  escalation?: Escalation | null;
+}) {
+  const parts = [
+    reminder && `${reminder.afterHours} 小時${reminder.repeat ? '起每隔同樣時間' : ''}提醒`,
+    escalation && `${escalation.afterHours} 小時 Escalation`,
+  ].filter(Boolean);
+  if (parts.length === 0) return null;
+  return (
+    <div className="mt-1 flex items-center gap-1 text-[0.8em] text-muted-foreground">
+      <AlarmClock size={12} aria-hidden className="shrink-0" />
+      <span className="truncate">{parts.join('・')}</span>
+    </div>
+  );
+}
+
 function RecipientLine({ recipient }: { recipient: EmailRecipient | null }) {
   if (!recipient) return <div className="mt-1 text-[0.85em] text-destructive">未設定收件對象</div>;
   switch (recipient.type) {

@@ -7,17 +7,20 @@ import {
   type DslError,
   EMAIL_TEMPLATE_VARIABLES,
   type EmailRecipient,
+  type Escalation,
   formIdOf,
   NODE_TYPE_LABELS,
   type NodeSettings,
   type NodeType,
   type ProcessDsl,
+  type Reminder,
 } from '@river/dsl';
 import type { FormSchema } from '@river/forms';
 import { useQuery } from '@tanstack/react-query';
 import { useBlocker } from '@tanstack/react-router';
 import { Background, Controls, ReactFlow, ReactFlowProvider, useReactFlow } from '@xyflow/react';
 import {
+  AlarmClock,
   ArrowDown,
   ArrowUp,
   CircleAlert,
@@ -796,6 +799,16 @@ function Inspector({
           onChange={(autoApprove) => onChange({ autoApprove })}
         />
       )}
+      {(settings.type === 'approval' || settings.type === 'form') && (
+        <TimeoutFields
+          key={`timeout-${node.id}`}
+          assignee={settings.assignee}
+          reminder={settings.reminder ?? null}
+          escalation={settings.escalation ?? null}
+          errors={node.data.errors}
+          onChange={onChange}
+        />
+      )}
       {settings.type === 'email' && (
         <EmailFields
           recipient={settings.recipient}
@@ -1055,6 +1068,206 @@ function AutoApproveField({
           <FieldKeys keys={fieldKeys} />
         </>
       )}
+    </div>
+  );
+}
+
+/** 逾時的時數；清空時存成 0，由檢查器提醒（TIMEOUT_INVALID_HOURS）。 */
+function HoursInput({
+  id,
+  hours,
+  invalid,
+  onChange,
+}: {
+  id: string;
+  hours: number;
+  invalid: boolean;
+  onChange: (hours: number) => void;
+}) {
+  return (
+    <span className="inline-flex items-center gap-1.5">
+      <Input
+        id={id}
+        type="number"
+        min={1}
+        step={1}
+        inputMode="numeric"
+        value={hours > 0 ? hours : ''}
+        aria-invalid={invalid || undefined}
+        onChange={(e) => onChange(Number(e.target.value) || 0)}
+        className="h-[2.2em] w-20"
+      />
+      小時
+    </span>
+  );
+}
+
+const ESCALATION_TARGET_MODES = [
+  { key: 'participant', label: '特定人員' },
+  { key: 'role', label: 'Role' },
+] as const;
+
+/**
+ * 人工節點的逾時處理：Reminder（N 小時後提醒目前的處理人，可以重複）與 Escalation（M 小時後轉給別人）。
+ * Escalation 的對象依指派方式而定：指派給 Role 時由 Designer 指定；指派給特定人或 Manager 時轉給處理人的 Manager，
+ * 找不到 Manager 時轉給 Fallback Role（指派給特定人的節點在這裡設定，指派給 Manager 的節點沿用節點的 Fallback Role）。
+ * 關閉時存成 null。Escalation 絕不會自動核准。
+ */
+function TimeoutFields({
+  assignee,
+  reminder,
+  escalation,
+  errors,
+  onChange,
+}: {
+  assignee: Assignee | null;
+  reminder: Reminder | null;
+  escalation: Escalation | null;
+  errors: DslError[];
+  onChange: (patch: Partial<NodeSettings>) => void;
+}) {
+  const target = escalation?.target ?? null;
+  // 還沒選好對象時也要記得正在選哪一種。
+  const [targetMode, setTargetMode] = useState<'participant' | 'role'>(
+    target?.type ?? 'participant',
+  );
+  const hoursInvalid = (hours: number) =>
+    errors.some((e) => e.code === 'TIMEOUT_INVALID_HOURS') && !(hours > 0);
+  const setEscalation = (patch: Partial<Escalation>) =>
+    escalation && onChange({ escalation: { ...escalation, ...patch } });
+  return (
+    <div className="grid gap-2 rounded-lg border p-2">
+      <span className="flex items-center gap-1.5 text-[0.85em] text-muted-foreground">
+        <AlarmClock size={13} aria-hidden />
+        逾時處理
+      </span>
+      <div className="grid gap-1.5">
+        <label className="flex items-center gap-1.5 text-[0.85em]">
+          <input
+            type="checkbox"
+            checked={reminder !== null}
+            onChange={(e) =>
+              onChange({ reminder: e.target.checked ? { afterHours: 24, repeat: false } : null })
+            }
+          />
+          Reminder：提醒目前的處理人
+        </label>
+        {reminder && (
+          <div className="grid gap-1.5 pl-5 text-[0.85em]">
+            <span className="flex items-center gap-1.5">
+              <label htmlFor="reminder-hours">Task 建立後</label>
+              <HoursInput
+                id="reminder-hours"
+                hours={reminder.afterHours}
+                invalid={hoursInvalid(reminder.afterHours)}
+                onChange={(afterHours) => onChange({ reminder: { ...reminder, afterHours } })}
+              />
+            </span>
+            <label className="flex items-center gap-1.5">
+              <input
+                type="checkbox"
+                checked={reminder.repeat}
+                onChange={(e) => onChange({ reminder: { ...reminder, repeat: e.target.checked } })}
+              />
+              之後每隔同樣時間再提醒
+            </label>
+          </div>
+        )}
+      </div>
+      <div className="grid gap-1.5">
+        <label className="flex items-center gap-1.5 text-[0.85em]">
+          <input
+            type="checkbox"
+            checked={escalation !== null}
+            onChange={(e) => onChange({ escalation: e.target.checked ? { afterHours: 72 } : null })}
+          />
+          Escalation：逾時未處理時轉給別人
+        </label>
+        {escalation && (
+          <div className="grid gap-1.5 pl-5 text-[0.85em]">
+            <span className="flex items-center gap-1.5">
+              <label htmlFor="escalation-hours">Task 建立後</label>
+              <HoursInput
+                id="escalation-hours"
+                hours={escalation.afterHours}
+                invalid={hoursInvalid(escalation.afterHours)}
+                onChange={(afterHours) => setEscalation({ afterHours })}
+              />
+            </span>
+            {!assignee && <p>先設定指派對象，再設定 Escalation 要轉給誰。</p>}
+            {assignee?.type === 'role' && (
+              <>
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-muted-foreground">轉給</span>
+                  <fieldset
+                    aria-label="Escalation 的對象"
+                    className="m-0 inline-flex min-w-0 rounded-md border-0 bg-muted p-0.5 text-[0.95em]"
+                  >
+                    {ESCALATION_TARGET_MODES.map((m) => (
+                      <button
+                        key={m.key}
+                        type="button"
+                        aria-pressed={targetMode === m.key}
+                        onClick={() => {
+                          if (m.key === targetMode) return;
+                          setTargetMode(m.key);
+                          setEscalation({ target: null });
+                        }}
+                        className={cn(
+                          'cursor-pointer rounded px-2 py-0.5 text-muted-foreground',
+                          targetMode === m.key && 'bg-card text-foreground shadow-sm',
+                        )}
+                      >
+                        {m.label}
+                      </button>
+                    ))}
+                  </fieldset>
+                </div>
+                {targetMode === 'participant' ? (
+                  <ParticipantAssignee
+                    participantId={target?.type === 'participant' ? target.participantId : null}
+                    onChange={(participantId) =>
+                      setEscalation({
+                        target: participantId ? { type: 'participant', participantId } : null,
+                      })
+                    }
+                  />
+                ) : (
+                  <RoleAssignee
+                    label="Escalation 的 Role"
+                    hint="Role 的每位成員都會看到轉過來的 Task；最先送出的決定生效。"
+                    roleId={target?.type === 'role' ? target.roleId : null}
+                    onChange={(roleId) =>
+                      setEscalation({ target: roleId ? { type: 'role', roleId } : null })
+                    }
+                  />
+                )}
+              </>
+            )}
+            {assignee?.type === 'participant' && (
+              <>
+                <p>
+                  轉給處理人的 Manager。處理人沒有 Manager，或 Manager 已停用時，轉給 Fallback
+                  Role。
+                </p>
+                <RoleAssignee
+                  label="Escalation 的 Fallback Role"
+                  placeholder="選擇 Fallback Role…"
+                  hint="處理人沒有有效的 Manager 時，由這個 Role 的任一成員處理。"
+                  roleId={escalation.fallbackRoleId ?? null}
+                  onChange={(fallbackRoleId) => setEscalation({ fallbackRoleId })}
+                />
+              </>
+            )}
+            {assignee?.type === 'manager' && (
+              <p>
+                轉給目前處理人的 Manager；找不到有效的 Manager 時，轉給上面設定的 Fallback Role。
+              </p>
+            )}
+            <p className="text-muted-foreground">原本的 Task 會作廢。Escalation 絕不會自動核准。</p>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
