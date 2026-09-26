@@ -1,19 +1,10 @@
 import type { RequestDetail, RequestEvent, RequestSummary } from '@river/contracts';
-import {
-  Check,
-  CheckCircle2,
-  Circle,
-  FileText,
-  Loader2,
-  RotateCcw,
-  Search,
-  Undo2,
-  XCircle,
-} from 'lucide-react';
+import { CheckCircle2, FileText, Loader2, RotateCcw, Search, XCircle } from 'lucide-react';
 import type { ReactNode } from 'react';
 import { FormDataView } from '@/components/form-fields';
 import { Avatar } from '@/components/people';
 import { Input } from '@/components/ui/input';
+import { branchLabel } from '@/lib/processes';
 import { assigneeLabel, FALLBACK_REASON_LABELS, isAdvancing, requestNumber } from '@/lib/requests';
 import { formatTime } from '@/lib/time';
 import { cn } from '@/lib/utils';
@@ -238,103 +229,6 @@ export function RequestContent({ request }: { request: RequestDetail }) {
   );
 }
 
-type StepState = 'done' | 'current' | 'advancing' | 'returned' | 'todo';
-
-/**
- * 每一步在目前這一輪的狀態：已完成、目前（有 open Task）、處理中（workflow 正在走到這一步）、還沒到。
- * 被 Return 的那一步標成 returned；重新送出後先前的核准都失效，所以只看這一輪的 Task。
- * 自動核准的步驟沒有 Task，看這一輪（最後一次重新送出之後）的 step.auto_approved 事件。
- */
-function stepStates(request: RequestDetail): StepState[] {
-  let previousDone = true;
-  const tasks = request.tasks.filter((t) => t.round === request.round);
-  const roundStart = request.events.findLastIndex((e) => e.type === 'request.resubmitted');
-  const autoApproved = new Set(
-    request.events
-      .slice(roundStart + 1)
-      .flatMap((e) => (e.type === 'step.auto_approved' && e.node ? [e.node.id] : [])),
-  );
-  return request.steps.map((step) => {
-    let state: StepState;
-    if (step.type === 'start') state = 'done';
-    else if (step.type === 'end') state = request.status === 'completed' ? 'done' : 'todo';
-    else if (autoApproved.has(step.nodeId)) state = 'done';
-    else {
-      const task = tasks.findLast((t) => t.nodeId === step.nodeId);
-      state =
-        task?.status === 'open'
-          ? 'current'
-          : task?.outcome === 'returned'
-            ? 'returned'
-            : task?.status === 'completed'
-              ? 'done'
-              : 'todo';
-    }
-    if (state === 'todo' && previousDone && isAdvancing(request)) state = 'advancing';
-    previousDone = state === 'done';
-    return state;
-  });
-}
-
-const STEP_TONE: Record<StepState, string> = {
-  done: 'border-status-approved bg-status-approved text-white',
-  current: 'border-status-open bg-status-open text-white',
-  advancing: 'border-status-open bg-card text-status-open',
-  returned: 'border-status-returned bg-status-returned text-white',
-  todo: 'border-border bg-card text-muted-foreground',
-};
-
-function StepIcon({ state }: { state: StepState }) {
-  if (state === 'done') return <Check size={13} strokeWidth={2.5} />;
-  if (state === 'advancing') return <Loader2 size={13} className="animate-spin" />;
-  if (state === 'returned') return <Undo2 size={13} strokeWidth={2.5} />;
-  return <Circle size={8} fill={state === 'current' ? 'currentColor' : 'none'} />;
-}
-
-export function Progress({ request }: { request: RequestDetail }) {
-  const states = stepStates(request);
-  return (
-    <ol className="flex items-start">
-      {request.steps.map((step, i) => {
-        const state = states[i] ?? 'todo';
-        return (
-          <li key={step.nodeId} className="flex flex-1 items-start last:flex-none">
-            <div className="grid justify-items-center gap-1 text-center">
-              <span
-                aria-hidden
-                className={cn(
-                  'grid size-7 place-items-center rounded-full border-2',
-                  STEP_TONE[state],
-                )}
-              >
-                <StepIcon state={state} />
-              </span>
-              <span className="font-medium text-[0.88em]">{step.name}</span>
-              <span className="text-[0.8em] text-muted-foreground">
-                {step.type === 'start'
-                  ? request.initiator.name
-                  : step.type === 'end'
-                    ? state === 'done'
-                      ? '已完成'
-                      : ''
-                    : step.assignee && assigneeLabel(step.assignee)}
-              </span>
-            </div>
-            {i < request.steps.length - 1 && (
-              <div
-                className={cn(
-                  'mx-2 mt-3.5 h-0.5 flex-1 rounded',
-                  state === 'done' ? 'bg-status-approved' : 'bg-border',
-                )}
-              />
-            )}
-          </li>
-        );
-      })}
-    </ol>
-  );
-}
-
 function describeEvent(e: RequestEvent): string {
   switch (e.type) {
     case 'request.started':
@@ -355,6 +249,10 @@ function describeEvent(e: RequestEvent): string {
       return `「${e.task?.nodeName}」的 Task 已作廢`;
     case 'step.auto_approved':
       return `「${e.node?.name}」符合條件，自動核准`;
+    case 'step.branch_chosen':
+      return e.edge?.branch?.type === 'expression'
+        ? `「${e.node?.name}」符合 ${branchLabel(e.edge.branch)}，流轉到「${e.edge.target.name}」`
+        : `「${e.node?.name}」沒有符合的條件，走預設分支到「${e.edge?.target.name}」`;
     case 'request.resubmitted':
       return `${e.actor?.name} 修改後重新送出，從頭開始審批`;
     case 'request.withdrawn':

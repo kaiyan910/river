@@ -1,5 +1,5 @@
 import { PERMISSIONS } from '@river/auth';
-import { DSL_ERROR_CODES, processDslSchema } from '@river/dsl';
+import { branchSchema, DSL_ERROR_CODES, processDslSchema } from '@river/dsl';
 import { formSchema } from '@river/forms';
 import { z } from 'zod';
 
@@ -219,6 +219,30 @@ export const startableProcessSchema = z.object({
 export type StartableProcess = z.infer<typeof startableProcessSchema>;
 export const startableProcessListSchema = z.array(startableProcessSchema);
 
+/**
+ * 唯讀的流程圖：節點只帶畫圖需要的欄位（處理人等細節在 steps），連線帶條件節點出邊的條件。
+ * position 沿用 Designer 畫布上的位置。
+ */
+export const processFlowSchema = z.object({
+  nodes: z.array(
+    z.object({
+      id: z.string(),
+      type: z.enum(['start', 'form', 'approval', 'condition', 'end']),
+      name: z.string(),
+      position: z.object({ x: z.number(), y: z.number() }),
+    }),
+  ),
+  edges: z.array(
+    z.object({
+      id: z.string(),
+      source: z.string(),
+      target: z.string(),
+      branch: branchSchema.nullable(),
+    }),
+  ),
+});
+export type ProcessFlow = z.infer<typeof processFlowSchema>;
+
 // ─── Request 與 Task ─────────────────────────────────────────────────────
 
 /** returned：被 Return，等待發起人修改後重新送出；completed、withdrawn 是最終狀態。 */
@@ -321,6 +345,7 @@ export const requestEventTypeSchema = z.enum([
   'task.returned',
   'task.superseded',
   'step.auto_approved',
+  'step.branch_chosen',
   'request.resubmitted',
   'request.withdrawn',
   'request.completed',
@@ -349,8 +374,19 @@ export const requestEventSchema = z.object({
   comment: z.string().nullable(),
   /** task.created：發起人沒有 Manager 或 Manager 已停用，Task 改派給 Fallback Role 時的原因；其他為 null。 */
   fallbackReason: fallbackReasonSchema.nullable(),
-  /** step.auto_approved：自動核准的審批步驟（這種事件沒有 Task）；其他為 null。不含自動核准的條件。 */
+  /**
+   * step.auto_approved：自動核准的審批步驟；step.branch_chosen：做出判斷的條件節點。
+   * 這兩種事件沒有 Task；其他為 null。不含自動核准的條件。
+   */
   node: z.object({ id: z.string(), name: z.string() }).nullable(),
+  /** step.branch_chosen：條件節點選中的出邊、它的條件，以及走向的節點；其他為 null。 */
+  edge: z
+    .object({
+      id: z.string(),
+      branch: branchSchema.nullable(),
+      target: z.object({ id: z.string(), name: z.string() }),
+    })
+    .nullable(),
 });
 export type RequestEvent = z.infer<typeof requestEventSchema>;
 
@@ -371,6 +407,8 @@ export const requestDetailSchema = requestSummarySchema.extend({
   round: z.number().int().positive(),
   /** 發起時鎖定的 Process Version 的流程預覽。 */
   steps: z.array(processStepSchema),
+  /** 同一個 Process Version 的流程圖（含條件節點與連線），用來畫出實際走過的路徑與完整流程圖。 */
+  flow: processFlowSchema,
   /** Process Version 裡有節點使用的 Form（顯示資料與填表 Task 用）。 */
   forms: z.array(formSchema),
   /** 這一輪已經填寫的 Form 資料，依填寫順序；先前每一輪的資料保留在資料庫，不在這裡顯示。 */

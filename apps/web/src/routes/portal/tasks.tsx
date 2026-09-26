@@ -15,13 +15,13 @@ import {
 } from '@/lib/requests';
 import { formatTime, timeAgo } from '@/lib/time';
 import { cn } from '@/lib/utils';
+import { Progress } from './request-progress';
 import {
   Card,
   EmptyDetail,
   ListColumn,
   ListMessage,
   ListSearch,
-  Progress,
   RequestContent,
   RequestHeader,
   SegmentTabs,

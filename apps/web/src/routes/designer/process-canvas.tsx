@@ -41,6 +41,7 @@ import {
 import { createContext, useCallback, useContext, useMemo, useState } from 'react';
 import { Avatar } from '@/components/people';
 import { directoryQueryOptions, roleDirectoryQueryOptions } from '@/lib/org';
+import { branchLabel } from '@/lib/processes';
 import { cn } from '@/lib/utils';
 
 export type RFNode = Node<CanvasNodeData, NodeType>;
@@ -280,14 +281,6 @@ function NodeCard({ data, selected, type }: NodeProps<RFNode>) {
       {type !== 'end' && <Handle type="source" position={Position.Bottom} />}
     </div>
   );
-}
-
-/** 出邊上顯示的條件；太長時截斷，完整內容在屬性面板。 */
-export function branchLabel(branch: Branch): string {
-  if (branch.type === 'default') return '預設';
-  const expression = branch.expression.trim();
-  if (!expression) return '（未設定條件）';
-  return expression.length > 28 ? `${expression.slice(0, 27)}…` : expression;
 }
 
 /** 開始與填表節點用的 Form；開始節點沒有時不顯示。 */

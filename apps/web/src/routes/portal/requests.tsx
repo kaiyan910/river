@@ -19,13 +19,13 @@ import {
 import { formatTime, timeAgo } from '@/lib/time';
 import { cn } from '@/lib/utils';
 import { START_REQUEST } from '@/navigation';
+import { Progress } from './request-progress';
 import {
   Card,
   EmptyDetail,
   ListColumn,
   ListMessage,
   ListSearch,
-  Progress,
   RequestContent,
   RequestHeader,
   RequestStatus,

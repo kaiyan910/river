@@ -6,7 +6,7 @@ import {
   processVersionSchema,
   publishRejectedSchema,
 } from '@river/contracts';
-import type { ProcessDsl } from '@river/dsl';
+import type { Branch, ProcessDsl } from '@river/dsl';
 import { queryOptions, useMutation, useQueryClient } from '@tanstack/react-query';
 import { ApiError, api } from '@/lib/api';
 
@@ -92,4 +92,12 @@ export function publishRejection(error: unknown): PublishRejected | null {
   if (!(error instanceof ApiError) || error.status !== 422) return null;
   const parsed = publishRejectedSchema.safeParse(error.body);
   return parsed.success ? parsed.data : null;
+}
+
+/** 條件節點出邊上顯示的條件；太長時截斷，完整內容在屬性面板。 */
+export function branchLabel(branch: Branch): string {
+  if (branch.type === 'default') return '預設';
+  const expression = branch.expression.trim();
+  if (!expression) return '（未設定條件）';
+  return expression.length > 28 ? `${expression.slice(0, 27)}…` : expression;
 }

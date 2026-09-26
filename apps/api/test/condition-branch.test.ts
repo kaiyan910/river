@@ -193,6 +193,39 @@ describe('條件分支（JSONata）', () => {
     expect((await openTasks(gm)).some((t) => t.request.id === id)).toBe(false);
   });
 
+  it('時間軸記錄條件選中的出邊；明細帶有畫流程圖用的節點與連線', async () => {
+    const id = await startPurchase('採購鍵盤', 50000);
+    await waitForTask(gm, id);
+
+    const d = await detail(id);
+    const chosen = d.events.filter((e) => e.type === 'step.branch_chosen');
+    expect(chosen).toEqual([
+      expect.objectContaining({
+        actor: null,
+        task: null,
+        node: { id: 'amount-check', name: '金額判斷' },
+        edge: {
+          id: 'over-10k',
+          branch: { type: 'expression', expression: 'amount > 10000' },
+          target: { id: 'gm', name: '總經理審批' },
+        },
+      }),
+    ]);
+    expect(d.flow.nodes.map((n) => [n.id, n.type])).toContainEqual(['amount-check', 'condition']);
+    expect(d.flow.edges).toContainEqual({
+      id: 'otherwise',
+      source: 'amount-check',
+      target: 'finance',
+      branch: { type: 'default' },
+    });
+    expect(d.flow.edges).toContainEqual({
+      id: 'e-start',
+      source: 'start',
+      target: 'amount-check',
+      branch: null,
+    });
+  });
+
   it('依出邊順序評估，第一個成立的條件勝出', async () => {
     const id = await startPurchase('採購產線設備', 250000);
 
@@ -231,6 +264,10 @@ describe('條件分支（JSONata）', () => {
       '總經理審批',
       '財務審批',
     ]);
+    // 每一輪各記錄一次判斷，畫面只看最後一次重新送出之後的那一筆。
+    expect(
+      done.events.filter((e) => e.type === 'step.branch_chosen').map((e) => e.edge?.id),
+    ).toEqual(['otherwise', 'over-10k']);
   });
 
   it('流程預覽列出每條分支上的步驟，不列出條件節點', async () => {

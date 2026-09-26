@@ -120,8 +120,12 @@ export function createActivities(db: Database) {
     /**
      * 從 Postgres 讀取條件節點的出邊與這一輪填過的 Form 資料，執行 JSONata，只回傳選中的出邊 ID：
      * Form 資料與表達式的結果都不進 Temporal history，表達式用到 $now() 也不影響 workflow 的 determinism。
+     * Request 仍是 running 時寫入 step.branch_chosen 事件，畫面才畫得出實際走過的路徑。
+     * 重試時以已經寫入的事件為準，不重新判斷（和 evaluateAutoApproval 相同的理由）。
      */
     async evaluateCondition(input: EvaluateConditionInput): Promise<string> {
+      const chosen = await branchAlreadyChosen(db, input);
+      if (chosen) return chosen;
       const { dsl, data } = await loadRound(db, input);
       const outgoing = dsl.edges.filter((e) => e.source === input.nodeId);
       // 只記錄出錯的出邊與 JSONata 的錯誤代碼，不記錄 Form 資料。
@@ -135,7 +139,25 @@ export function createActivities(db: Database) {
       );
       // 發佈前檢查（CONDITION_NO_DEFAULT）已經擋下；萬一出現，寧可讓 workflow 失敗也不要亂走。
       if (!edgeId) throw ApplicationFailure.nonRetryable(`條件節點 ${input.nodeId} 沒有預設出邊`);
-      return edgeId;
+
+      // Request 已經不是 running（例如剛被 Withdraw）時不寫事件；workflow 收到 Signal 後就會結束。
+      return db.transaction(async (tx) => {
+        const [request] = await tx
+          .select({ status: requests.status })
+          .from(requests)
+          .where(eq(requests.id, input.requestId))
+          .for('update');
+        if (request?.status !== 'running') return edgeId;
+        const chosen = await branchAlreadyChosen(tx, input);
+        if (chosen) return chosen;
+        await tx.insert(requestEvents).values({
+          requestId: input.requestId,
+          type: 'step.branch_chosen',
+          nodeId: input.nodeId,
+          edgeId,
+        });
+        return edgeId;
+      });
     },
 
     /**
@@ -209,18 +231,38 @@ function jsonataErrorCode(error: unknown): unknown {
   return (error as { code?: unknown } | null)?.code;
 }
 
+async function lastEvent(db: Database | Tx, requestId: string) {
+  const [last] = await db
+    .select({
+      type: requestEvents.type,
+      nodeId: requestEvents.nodeId,
+      edgeId: requestEvents.edgeId,
+    })
+    .from(requestEvents)
+    .where(eq(requestEvents.requestId, requestId))
+    .orderBy(desc(requestEvents.id))
+    .limit(1);
+  return last;
+}
+
 /** Request 的最後一筆事件是不是這一步的自動核准（evaluateAutoApproval 重試時已經寫入）。 */
 async function lastEventIsAutoApproval(
   db: Database | Tx,
   input: { requestId: string; nodeId: string },
 ): Promise<boolean> {
-  const [last] = await db
-    .select({ type: requestEvents.type, nodeId: requestEvents.nodeId })
-    .from(requestEvents)
-    .where(eq(requestEvents.requestId, input.requestId))
-    .orderBy(desc(requestEvents.id))
-    .limit(1);
+  const last = await lastEvent(db, input.requestId);
   return last?.type === 'step.auto_approved' && last.nodeId === input.nodeId;
+}
+
+/** 最後一筆事件是這個條件節點的判斷（evaluateCondition 重試時已經寫入）時，回傳當時選中的出邊。 */
+async function branchAlreadyChosen(
+  db: Database | Tx,
+  input: { requestId: string; nodeId: string },
+): Promise<string | undefined> {
+  const last = await lastEvent(db, input.requestId);
+  return last?.type === 'step.branch_chosen' && last.nodeId === input.nodeId
+    ? (last.edgeId ?? undefined)
+    : undefined;
 }
 
 /**

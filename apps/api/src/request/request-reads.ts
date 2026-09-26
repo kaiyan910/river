@@ -120,6 +120,16 @@ export class RequestReads {
     const nodeNames = new Map(dsl.nodes.map((n) => [n.id, n.name]));
     const usedForms = new Set(dsl.nodes.map(formIdOf));
     const taskById = new Map(taskRows.map((t) => [t.id, t]));
+    const chosenEdge = (edgeId: string | null) => {
+      const edge = dsl.edges.find((d) => d.id === edgeId);
+      return edge
+        ? {
+            id: edge.id,
+            branch: edge.branch ?? null,
+            target: { id: edge.target, name: nodeNames.get(edge.target) ?? edge.target },
+          }
+        : null;
+    };
     const events: RequestEvent[] = eventRows.map((e) => {
       const task = e.taskId ? taskById.get(e.taskId) : undefined;
       return {
@@ -138,12 +148,22 @@ export class RequestReads {
         comment: e.comment,
         fallbackReason: e.fallbackReason,
         node: e.nodeId ? { id: e.nodeId, name: nodeNames.get(e.nodeId) ?? e.nodeId } : null,
+        edge: chosenEdge(e.edgeId),
       };
     });
     return {
       ...summary,
       round,
       steps: stepsOf(dsl, names),
+      flow: {
+        nodes: dsl.nodes.map(({ id, type, name, position }) => ({ id, type, name, position })),
+        edges: dsl.edges.map(({ id, source, target, branch }) => ({
+          id,
+          source,
+          target,
+          branch: branch ?? null,
+        })),
+      },
       forms: dsl.forms.filter((f) => usedForms.has(f.id)),
       data: dataRows.map((d) => ({
         nodeId: d.nodeId,
