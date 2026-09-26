@@ -312,7 +312,10 @@ export const REQUEST_EVENT_TYPES = [
   'step.auto_approved',
   'step.branch_chosen',
   'step.email_sent',
+  'step.http_sent',
+  'step.http_failed',
   'request.resubmitted',
+  'request.retried',
   'request.withdrawn',
   'request.cancelled',
   'request.completed',
@@ -343,7 +346,10 @@ export const requestEvents = pgTable(
     fallbackReason: text('fallback_reason').$type<FallbackReason>(),
     /**
      * step.auto_approved：自動核准的審批節點；step.branch_chosen：做出判斷的條件節點；
-     * step.email_sent：寄出信件的 Email 節點。都是 Process Version 裡的節點 ID；這幾種事件沒有 Task。
+     * step.email_sent：寄出信件的 Email 節點；step.http_sent、step.http_failed：呼叫成功、重試全部失敗的 HTTP 節點。
+     * 都是 Process Version 裡的節點 ID；這幾種事件沒有 Task。
+     * step.http_failed 表示 Request 暫停，等 Administrator 重試（request.retried）或 Cancel；
+     * comment 是失敗原因（例如 HTTP 狀態碼），不含秘密、body 或回應內容。
      */
     nodeId: text('node_id'),
     /** step.branch_chosen：條件節點選中的出邊（Process Version 裡的連線 ID）。 */
@@ -402,4 +408,41 @@ export const attachments = pgTable(
     uploadedAt: timestamp('uploaded_at', { withTimezone: true }),
   },
   (t) => [index().on(t.requestId), index().on(t.uploadedBy)],
+);
+
+// ─── Credential ───────────────────────────────────────────────────────────
+
+/**
+ * 秘密送出的方式：bearer 放在 `Authorization: Bearer <秘密>`；header 放在 headerName 指定的 header（例如 X-API-Key）。
+ */
+export const CREDENTIAL_SCHEMES = ['bearer', 'header'] as const;
+export type CredentialScheme = (typeof CREDENTIAL_SCHEMES)[number];
+
+/**
+ * 集中管理的外部系統憑證。HTTP 節點只以 name 引用，所以名稱建立後不能改。
+ * secret 是 AES-256-GCM 加密後的內容（見 credential-cipher.ts），只有 httpRequest activity 在執行時解密；
+ * API 只寫入、永遠不回傳。輪替只換 secret，Process 不需要重新發佈。
+ */
+export const credentials = pgTable(
+  'credentials',
+  {
+    id: uuid('id').primaryKey(),
+    name: text('name').notNull().unique(),
+    scheme: text('scheme').$type<CredentialScheme>().notNull(),
+    /** scheme 是 header 時的 header 名稱；bearer 時為 null。 */
+    headerName: text('header_name'),
+    secret: text('secret').notNull(),
+    createdBy: uuid('created_by')
+      .notNull()
+      .references(() => participants.id),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    /** 最後一次輪替秘密的人與時間；建立時與 createdBy、createdAt 相同。 */
+    rotatedBy: uuid('rotated_by')
+      .notNull()
+      .references(() => participants.id),
+    rotatedAt: timestamp('rotated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    check('credentials_header_name', sql`(${t.scheme} = 'header') = (${t.headerName} is not null)`),
+  ],
 );

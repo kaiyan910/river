@@ -1,4 +1,4 @@
-import { connectDatabase } from '@river/db';
+import { connectDatabase, createCredentialCipher } from '@river/db';
 import { createEmailSender, emailEnvSchema } from '@river/email';
 import { loggerEnvSchema } from '@river/logger';
 import { Client, Connection } from '@temporalio/client';
@@ -25,6 +25,7 @@ const app = await createApp({
   temporal: new Client({ connection, namespace: env.TEMPORAL_NAMESPACE }),
   taskQueue: env.TEMPORAL_TASK_QUEUE,
   log: loggerEnvSchema.parse(process.env),
+  credentialCipher: createCredentialCipher(env.CREDENTIAL_ENCRYPTION_KEY),
 });
 app.enableShutdownHooks();
 await app.listen(env.PORT);

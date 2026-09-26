@@ -20,6 +20,7 @@ import {
   ClipboardPen,
   GitFork,
   GitMerge,
+  Globe,
   Loader2,
   Mail,
   Split,
@@ -61,6 +62,7 @@ interface RequestProgress {
  * 自動核准的步驟沒有 Task，看這一輪的 step.auto_approved；條件節點看這一輪的 step.branch_chosen。
  * 並行分支與匯合節點沒有 Task 也沒有事件：走進它們的每一步都完成（或被略過）時就算完成。
  * Email 節點看這一輪的 step.email_sent；沒有收件人時不會寫事件，所以後面的步驟已經開始時也算完成。
+ * HTTP 節點看這一輪的 step.http_sent；Request 暫停在這一步時標成目前的一步。
  */
 function progressOf(request: RequestDetail): RequestProgress {
   const tasks = request.tasks.filter((t) => t.round === request.round);
@@ -72,6 +74,9 @@ function progressOf(request: RequestDetail): RequestProgress {
   const emailSent = new Set(
     roundEvents.flatMap((e) => (e.type === 'step.email_sent' && e.node ? [e.node.id] : [])),
   );
+  const httpSent = new Set(
+    roundEvents.flatMap((e) => (e.type === 'step.http_sent' && e.node ? [e.node.id] : [])),
+  );
   const chosen = new Map(
     roundEvents.flatMap((e) =>
       e.type === 'step.branch_chosen' && e.node && e.edge ? [[e.node.id, e.edge.id] as const] : [],
@@ -80,7 +85,11 @@ function progressOf(request: RequestDetail): RequestProgress {
   inferChosenBranches(
     request.flow,
     chosen,
-    (id) => autoApproved.has(id) || emailSent.has(id) || tasks.some((t) => t.nodeId === id),
+    (id) =>
+      autoApproved.has(id) ||
+      emailSent.has(id) ||
+      httpSent.has(id) ||
+      tasks.some((t) => t.nodeId === id),
   );
   const { steps, reachable } = requestPath(request.flow, chosen);
   const byId = new Map(request.flow.nodes.map((n) => [n.id, n]));
@@ -112,6 +121,9 @@ function progressOf(request: RequestDetail): RequestProgress {
           .map(stateOf);
         return after.some((s) => s !== 'todo' && s !== 'skipped') ? 'done' : 'todo';
       }
+      case 'http':
+        if (httpSent.has(node.id)) return 'done';
+        return request.paused?.nodeId === node.id ? 'current' : 'todo';
       case 'parallelSplit':
       case 'parallelJoin': {
         const before = request.flow.edges
@@ -171,6 +183,12 @@ function progressOf(request: RequestDetail): RequestProgress {
       else if (node.type === 'parallelSplit') caption = '各分支同時進行';
       else if (node.type === 'email')
         caption = emailSent.has(node.id) ? '已寄出 Email' : '寄送 Email';
+      else if (node.type === 'http')
+        caption = httpSent.has(node.id)
+          ? '已呼叫外部系統'
+          : request.paused?.nodeId === node.id
+            ? '呼叫失敗，已暫停'
+            : '呼叫外部系統';
       else if (node.type === 'parallelJoin')
         caption = state === 'done' ? '所有分支已完成' : '等所有分支完成';
       else if (autoApproved.has(node.id)) caption = '自動核准';
@@ -312,6 +330,7 @@ const FLOW_ICONS = {
   parallelSplit: GitFork,
   parallelJoin: GitMerge,
   email: Mail,
+  http: Globe,
   end: CircleStop,
 } as const;
 

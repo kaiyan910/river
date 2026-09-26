@@ -3,8 +3,10 @@ import {
   type InterpretProcessInput,
   REASSIGN_SIGNAL,
   RESUBMITTED_SIGNAL,
+  RETRY_SIGNAL,
   type ReassignSignal,
   type ResubmittedSignal,
+  type RetrySignal,
   TASK_COMPLETED_SIGNAL,
   type TaskCompletedSignal,
   WITHDRAW_SIGNAL,
@@ -30,8 +32,18 @@ const {
   evaluateAutoApproval,
   escalateTask,
   completeRequest,
+  pauseForHttp,
 } = proxyActivities<Activities>({
   startToCloseTimeout: '30 seconds',
+});
+
+/**
+ * HTTP 節點：外部系統暫時故障時退避重試幾次；全部失敗（或遇到不可重試的錯誤）就暫停 Request，
+ * 等 Administrator 重試或 Cancel（見 walk 裡的 HTTP 節點）。單次呼叫的時限是 20 秒（HTTP_TIMEOUT_MS）。
+ */
+const http = proxyActivities<Activities>({
+  startToCloseTimeout: '1 minute',
+  retry: { initialInterval: '5 seconds', backoffCoefficient: 2, maximumAttempts: 4 },
 });
 
 /**
@@ -71,6 +83,7 @@ export const resubmittedSignal = defineSignal<[ResubmittedSignal]>(RESUBMITTED_S
 export const withdrawSignal = defineSignal(WITHDRAW_SIGNAL);
 export const cancelSignal = defineSignal(CANCEL_SIGNAL);
 export const reassignSignal = defineSignal<[ReassignSignal]>(REASSIGN_SIGNAL);
+export const retrySignal = defineSignal<[RetrySignal]>(RETRY_SIGNAL);
 
 /**
  * 通用的 interpreter：讀取 Process Version 的 DSL，從「開始」沿著連線走到「結束」。
@@ -81,6 +94,8 @@ export const reassignSignal = defineSignal<[ReassignSignal]>(REASSIGN_SIGNAL);
  * 不成立或無法判斷時照常建立 Task。重新送出後從頭再跑一次，所以每一輪都重新判斷。
  * 並行分支（parallelSplit）的各條分支同時走，每一條都走到配對的 parallelJoin 後才繼續（見 walk）。
  * Email 節點交給 sendEmail activity 寄出後直接往下走。
+ * HTTP 節點交給 httpRequest activity（帶重試）呼叫外部系統後往下走；Form 資料與 Credential 都只在 activity 裡讀取。
+ * 重試全部失敗時由 pauseForHttp 記錄暫停並通知 Administrator，等到 retry Signal 再呼叫一次，或 Request 被 Cancel。
  * 新 Task 寄信給處理人，Return 與完成寄信給發起人（見 notify）；信件只有 Request 標題、Process 名稱與連結。
  * 人工節點設定了 Reminder 或 Escalation 時，等待 Task 期間用 durable timer 計時（見 waitForTask）：
  * Reminder 寄信提醒目前的處理人；Escalation 把 Task 轉給新的處理人，之後改等新的 Task。Task 完成時 timer 一併取消。
@@ -97,6 +112,8 @@ export const reassignSignal = defineSignal<[ReassignSignal]>(REASSIGN_SIGNAL);
  * resubmitted 只在輪次比目前新時才重新開始，withdraw、cancel 重複送出也一樣結束；
  * reassign 只記下「誰由誰接手」，重複送出記下的是同一件事。
  *
+ * retry 只在 sequence 比暫停時已經重試過的次數大時才重試，重複送出沒有影響。
+ *
  * Cancel 與 Reassign 是新的 Signal，舊的 history 裡不會出現：沒有收到時條件判斷、timer 與呼叫的 activity
  * 和原本完全一樣；收到 reassign 之後才有的新指令（通知新的處理人、重新計時）只會出現在新的 history 裡，
  * 所以不需要 patched()。
@@ -112,6 +129,8 @@ export async function interpretProcess({
   let cancelled = false;
   // Reassign：作廢的 taskId → 接手的新 taskId。
   const reassigned = new Map<string, string>();
+  // Administrator 重試暫停的 HTTP 節點：收到過最大的 sequence。
+  let latestRetry = 0;
   setHandler(taskCompletedSignal, ({ taskId, outcome }) => {
     if (!outcomes.has(taskId)) outcomes.set(taskId, outcome);
   });
@@ -126,6 +145,9 @@ export async function interpretProcess({
   });
   setHandler(reassignSignal, ({ taskId, newTaskId }) => {
     if (!reassigned.has(taskId)) reassigned.set(taskId, newTaskId);
+  });
+  setHandler(retrySignal, ({ sequence }) => {
+    latestRetry = Math.max(latestRetry, sequence);
   });
   const ended = () => withdrawn || cancelled;
   // 萬一 Return 的 Signal 沒送到，收到重新送出一樣從頭開始。
@@ -200,6 +222,26 @@ export async function interpretProcess({
           });
         } catch (error) {
           log.warn('Email 節點寄送失敗，略過', { requestId, nodeId: node.id, error });
+        }
+        if (!stopped()) node = next(node);
+        continue;
+      }
+      // HTTP 節點是新的節點類型、retry 是新的 Signal，舊的 history 裡不會出現，所以不需要 patched()。
+      // 重試全部失敗時暫停：pauseForHttp 回傳暫停當下已經重試過幾次，等到比它新的 retry Signal 再呼叫一次；
+      // 同一次走到這一步用同一個 visit，所以成功過就不會重複送出。Request 停下來（Cancel、Withdraw、Return）時不再等。
+      if (node.type === 'http') {
+        const nodeId = node.id;
+        const count = visit(nodeId);
+        for (;;) {
+          try {
+            await http.httpRequest({ requestId, processVersionId, nodeId, visit: count });
+            break;
+          } catch (error) {
+            if (stopped()) break;
+            const retries = await pauseForHttp({ requestId, nodeId, reason: failureReason(error) });
+            await condition(() => latestRetry > retries || stopped());
+            if (stopped()) break;
+          }
         }
         if (!stopped()) node = next(node);
         continue;
@@ -397,4 +439,14 @@ function assignmentOf(
         ? { initiatorManager: { fallbackRoleId: assignee.fallbackRoleId } }
         : null;
   }
+}
+
+/** activity 失敗的原因：httpRequest 丟出的訊息只有狀態碼或錯誤代碼（見 activities.ts），不含秘密。 */
+function failureReason(error: unknown): string {
+  let current = error as { message?: unknown; cause?: unknown } | undefined;
+  // ActivityFailure 的 cause 才是 activity 丟出的 ApplicationFailure。
+  while (current?.cause) current = current.cause as typeof current;
+  return typeof current?.message === 'string' && current.message
+    ? current.message
+    : '外部系統呼叫失敗';
 }

@@ -4,6 +4,7 @@ export {
   interpretProcess,
   reassignSignal,
   resubmittedSignal,
+  retrySignal,
   taskCompletedSignal,
   withdrawSignal,
 } from './interpret-process.js';

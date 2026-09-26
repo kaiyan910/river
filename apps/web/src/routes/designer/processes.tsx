@@ -9,6 +9,8 @@ import {
   type EmailRecipient,
   type Escalation,
   formIdOf,
+  HTTP_METHODS,
+  type HttpMethod,
   NODE_TYPE_LABELS,
   type NodeSettings,
   type NodeType,
@@ -26,6 +28,7 @@ import {
   CircleAlert,
   CircleCheck,
   FileText,
+  KeyRound,
   Lock,
   Plus,
   Save,
@@ -43,6 +46,7 @@ import { toast } from '@/components/toast';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { credentialDirectoryQueryOptions } from '@/lib/credentials';
 import { directoryQueryOptions, roleDirectoryQueryOptions } from '@/lib/org';
 import {
   processesQueryOptions,
@@ -702,6 +706,7 @@ const PALETTE: { type: NodeType; hint: string }[] = [
   { type: 'parallelSplit', hint: '每條出邊同時進行，例如 IT 和財務同時審批' },
   { type: 'parallelJoin', hint: '等並行分支的每一條都完成，Request 才繼續' },
   { type: 'email', hint: '寄一封信給特定人、Role、發起人或發起人的 Manager' },
+  { type: 'http', hint: '呼叫另一個內部系統，body 以 JSONata 從 Form 資料組成' },
   { type: 'end', hint: '流程結束' },
 ];
 
@@ -814,6 +819,17 @@ function Inspector({
           recipient={settings.recipient}
           subject={settings.subject}
           message={settings.message}
+          errors={node.data.errors}
+          onChange={onChange}
+        />
+      )}
+      {settings.type === 'http' && (
+        <HttpFields
+          method={settings.method}
+          url={settings.url}
+          body={settings.body}
+          credential={settings.credential}
+          fieldKeys={fieldKeys}
           errors={node.data.errors}
           onChange={onChange}
         />
@@ -1376,6 +1392,124 @@ const RECIPIENT_MODES = [
  * Email 節點：收件對象與訊息範本。範本只能用 EMAIL_TEMPLATE_VARIABLES 裡的變數，
  * 引用 Form 欄位等其他變數時由檢查器擋下；點變數會加到內文最後面。
  */
+/**
+ * HTTP 節點：method、URL、以 JSONata 組成的 body，以及以名稱引用的 Credential（選填）。
+ * Credential 清單只有名稱與送出方式，Designer 看不到秘密；秘密在執行時才由 activity 解密。
+ */
+function HttpFields({
+  method,
+  url,
+  body,
+  credential,
+  fieldKeys,
+  errors,
+  onChange,
+}: {
+  method: HttpMethod;
+  url: string;
+  body: string;
+  credential: string | null;
+  fieldKeys: string[];
+  errors: DslError[];
+  onChange: (patch: Partial<NodeSettings>) => void;
+}) {
+  const credentials = useQuery(credentialDirectoryQueryOptions);
+  const urlInvalid = errors.some((e) => e.code === 'HTTP_NO_URL' || e.code === 'HTTP_INVALID_URL');
+  const bodyInvalid = errors.some(
+    (e) => e.code === 'INVALID_JSONATA' || e.code === 'HTTP_BODY_NOT_ALLOWED',
+  );
+  // 已經不存在的 Credential 仍然列出，讓 Designer 看得到目前引用的名稱。
+  const missing =
+    credential && credentials.isSuccess && !credentials.data.some((c) => c.name === credential);
+  const describe = (c: { scheme: string; headerName: string | null }) =>
+    c.scheme === 'bearer' ? 'Authorization: Bearer' : `${c.headerName} header`;
+  return (
+    <>
+      <div className="grid gap-1">
+        <Label htmlFor="http-url" className="font-normal text-[0.85em] text-muted-foreground">
+          請求
+        </Label>
+        <div className="flex gap-1.5">
+          <select
+            aria-label="HTTP method"
+            value={method}
+            onChange={(e) => onChange({ method: e.target.value as HttpMethod })}
+            className="h-[2.5em] rounded-lg border border-input bg-card px-1.5 font-mono text-[0.85em]"
+          >
+            {HTTP_METHODS.map((m) => (
+              <option key={m} value={m}>
+                {m}
+              </option>
+            ))}
+          </select>
+          <Input
+            id="http-url"
+            value={url}
+            placeholder="https://erp.internal/api/orders"
+            spellCheck={false}
+            aria-invalid={urlInvalid || undefined}
+            onChange={(e) => onChange({ url: e.target.value })}
+            className="min-w-0 flex-1 font-mono text-[0.85em]"
+          />
+        </div>
+      </div>
+      <div className="grid gap-1">
+        <Label htmlFor="http-body" className="font-normal text-[0.85em] text-muted-foreground">
+          Body（JSONata，選填）
+        </Label>
+        <textarea
+          id="http-body"
+          value={body}
+          rows={4}
+          spellCheck={false}
+          placeholder={'例如：{ "title": destination, "amount": amount }'}
+          aria-invalid={bodyInvalid || undefined}
+          onChange={(e) => onChange({ body: e.target.value })}
+          className="w-full rounded-md border border-input bg-card px-2 py-1 font-mono text-[0.85em] aria-invalid:border-destructive"
+        />
+        <p className="text-[0.8em] text-muted-foreground">
+          結果以 JSON 送出；留白代表不帶 body。回應內容不會寫回 Request。
+        </p>
+        <FieldKeys keys={fieldKeys} />
+      </div>
+      <div className="grid gap-1">
+        <Label
+          htmlFor="http-credential"
+          className="flex items-center gap-1 font-normal text-[0.85em] text-muted-foreground"
+        >
+          <KeyRound size={13} aria-hidden /> Credential（選填）
+        </Label>
+        <select
+          id="http-credential"
+          value={credential ?? ''}
+          aria-invalid={missing || undefined}
+          onChange={(e) => onChange({ credential: e.target.value || null })}
+          className="h-[2.5em] w-full rounded-lg border border-input bg-card px-2 aria-invalid:border-destructive"
+        >
+          <option value="">不需要認證</option>
+          {credentials.data?.map((c) => (
+            <option key={c.name} value={c.name}>
+              {c.name}（{describe(c)}）
+            </option>
+          ))}
+          {missing && <option value={credential}>{credential}（已不存在）</option>}
+        </select>
+        <p className="text-[0.8em] text-muted-foreground">
+          {missing
+            ? '這個 Credential 已經不存在；流程走到這一步會暫停，請改選或請管理員重新建立。'
+            : '流程只記下 Credential 的名稱；輪替秘密不需要重新發佈。'}
+        </p>
+        {credentials.isError && (
+          <p className="text-[0.8em] text-destructive">{credentials.error.message}</p>
+        )}
+      </div>
+      <p className="text-[0.8em] text-muted-foreground">
+        呼叫失敗時會自動重試；全部失敗時 Request 暫停，由 Administrator 重試或 Cancel。
+      </p>
+    </>
+  );
+}
+
 function EmailFields({
   recipient,
   subject,

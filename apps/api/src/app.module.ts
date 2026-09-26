@@ -1,7 +1,7 @@
 import type { IncomingMessage } from 'node:http';
 import { type DynamicModule, Global, Module } from '@nestjs/common';
 import { APP_PIPE } from '@nestjs/core';
-import type { Database } from '@river/db';
+import type { CredentialCipher, Database } from '@river/db';
 import type { EmailSender } from '@river/email';
 import { createLogger, type LoggerEnv } from '@river/logger';
 import type { Client } from '@temporalio/client';
@@ -11,6 +11,7 @@ import { ZodValidationPipe } from 'nestjs-zod';
 import { AttachmentModule } from './attachment/attachment.module.js';
 import type { AttachmentStorage } from './attachment/attachment-storage.js';
 import type { Auth } from './auth/create-auth.js';
+import { CredentialModule } from './credential/credential.module.js';
 import { HealthController } from './health/health.controller.js';
 import { OrgModule } from './org/org.module.js';
 import { ProcessModule } from './process/process.module.js';
@@ -23,6 +24,7 @@ import {
   APP_URL,
   ATTACHMENT_STORAGE,
   AUTH,
+  CREDENTIAL_CIPHER,
   DATABASE,
   EMAIL_SENDER,
   TEMPORAL_CLIENT,
@@ -41,6 +43,8 @@ export interface AppDeps {
   temporal: Client;
   taskQueue: string;
   log: LoggerEnv;
+  /** Credential 秘密的加密；worker 用同一把金鑰解密。 */
+  credentialCipher: CredentialCipher;
 }
 
 @Global()
@@ -57,6 +61,7 @@ class InfrastructureModule {
         { provide: ATTACHMENT_STORAGE, useValue: deps.storage },
         { provide: TEMPORAL_CLIENT, useValue: deps.temporal },
         { provide: TEMPORAL_TASK_QUEUE, useValue: deps.taskQueue },
+        { provide: CREDENTIAL_CIPHER, useValue: deps.credentialCipher },
       ],
       exports: [
         DATABASE,
@@ -66,6 +71,7 @@ class InfrastructureModule {
         ATTACHMENT_STORAGE,
         TEMPORAL_CLIENT,
         TEMPORAL_TASK_QUEUE,
+        CREDENTIAL_CIPHER,
       ],
     };
   }
@@ -95,6 +101,7 @@ export class AppModule {
         AttachmentModule,
         ServiceAccountModule,
         ExternalApiModule,
+        CredentialModule,
       ],
       controllers: [HealthController],
       providers: [{ provide: APP_PIPE, useClass: ZodValidationPipe }],

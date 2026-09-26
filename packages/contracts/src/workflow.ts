@@ -52,3 +52,14 @@ export interface ReassignSignal {
   taskId: string;
   newTaskId: string;
 }
+
+/**
+ * HTTP 節點重試全部失敗後 Request 暫停；Administrator 按下重試、API 提交 transaction 後送出。
+ * sequence 是這筆 Request 第幾次重試（request.retried 事件的數量）：workflow 只在 sequence 比看過的新時才重試
+ * 暫停中的 HTTP 節點，所以可以安全重送。
+ */
+export const RETRY_SIGNAL = 'retry';
+
+export interface RetrySignal {
+  sequence: number;
+}

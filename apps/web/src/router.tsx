@@ -11,6 +11,7 @@ import { z } from 'zod';
 import { Toaster } from '@/components/toast';
 import { meQueryOptions } from '@/lib/me';
 import {
+  CREDENTIALS,
   canAccess,
   type NavItem,
   PARTICIPANTS,
@@ -20,6 +21,7 @@ import {
   ROLES,
   SERVICE_ACCOUNTS,
 } from '@/navigation';
+import { CredentialsPage } from '@/routes/admin/credentials';
 import { ParticipantsPage } from '@/routes/admin/participants';
 import { ReassignPage } from '@/routes/admin/reassign';
 import { RolesPage } from '@/routes/admin/roles';
@@ -196,6 +198,21 @@ const processesRoute = createRoute({
   },
 });
 
+const credentialsRoute = createRoute({
+  getParentRoute: () => authenticatedRoute,
+  path: '/designer/credentials',
+  validateSearch: selectionSearch,
+  component: function Credentials() {
+    const { id } = credentialsRoute.useSearch();
+    const navigate = credentialsRoute.useNavigate();
+    return (
+      <Guarded item={CREDENTIALS}>
+        <CredentialsPage selected={id} onSelect={(next) => navigate({ search: { id: next } })} />
+      </Guarded>
+    );
+  },
+});
+
 const startRoute = createRoute({
   getParentRoute: () => authenticatedRoute,
   path: '/start',
@@ -274,6 +291,7 @@ const routeTree = rootRoute.addChildren([
     reassignRoute,
     serviceAccountsRoute,
     processesRoute,
+    credentialsRoute,
     startRoute,
     tasksRoute,
     requestsRoute,

@@ -151,7 +151,7 @@ export function RequestStatus({
   request,
   withStep,
 }: {
-  request: Pick<RequestSummary, 'status' | 'openTasks' | 'returned'>;
+  request: Pick<RequestSummary, 'status' | 'openTasks' | 'returned' | 'paused'>;
   withStep?: boolean;
 }) {
   if (
@@ -174,6 +174,16 @@ export function RequestStatus({
         <span className="truncate">
           已退回
           {withStep && request.returned?.comment && ` · ${request.returned.comment}`}
+        </span>
+      </span>
+    );
+  // HTTP 節點重試全部失敗：等 Administrator 重試或 Cancel。並行的其他分支上可能還有 Task。
+  if (request.paused && request.openTasks.length === 0)
+    return (
+      <span className="inline-flex min-w-0 items-center gap-1.5 text-[0.86em] text-status-returned">
+        <span className="size-[7px] shrink-0 rounded-full bg-status-returned" />
+        <span className="truncate">
+          已暫停{withStep && ` · 「${request.paused.nodeName}」呼叫外部系統失敗`}
         </span>
       </span>
     );
@@ -287,6 +297,12 @@ function describeEvent(e: RequestEvent): string {
         : `「${e.node?.name}」沒有符合的條件，走預設分支到「${e.edge?.target.name}」`;
     case 'step.email_sent':
       return `「${e.node?.name}」寄出 Email 通知`;
+    case 'step.http_sent':
+      return `「${e.node?.name}」呼叫外部系統成功`;
+    case 'step.http_failed':
+      return `「${e.node?.name}」呼叫外部系統重試後仍然失敗，申請暫停，等待 Administrator 處理`;
+    case 'request.retried':
+      return `${e.actor?.name} 重試暫停的步驟`;
     case 'request.resubmitted':
       return `${e.actor?.name} 修改後重新送出，從頭開始審批`;
     case 'request.withdrawn':
@@ -309,6 +325,7 @@ function SystemEventIcon({ type }: { type: RequestEvent['type'] }) {
 
 const EVENT_TONE: Partial<Record<RequestEvent['type'], string>> = {
   'task.returned': 'text-status-returned',
+  'step.http_failed': 'text-status-returned',
   'task.escalated': 'text-status-returned',
   'request.resubmitted': 'text-status-open',
   'request.cancelled': 'text-destructive',

@@ -1,6 +1,6 @@
 import { extname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { Database } from '@river/db';
+import type { CredentialCipher, Database } from '@river/db';
 import type { EmailSender } from '@river/email';
 import { type NativeConnection, Worker } from '@temporalio/worker';
 import { createActivities } from './activities.js';
@@ -18,6 +18,8 @@ export interface WorkerDeps {
   emailSender: EmailSender;
   /** 瀏覽器看到的網址，信件裡的連結以它為準。 */
   appUrl: string;
+  /** HTTP 節點在 activity 內解密 Credential 用；和 api 同一把金鑰。 */
+  credentialCipher: CredentialCipher;
 }
 
 export function createWorker({
@@ -27,12 +29,13 @@ export function createWorker({
   db,
   emailSender,
   appUrl,
+  credentialCipher,
 }: WorkerDeps) {
   return Worker.create({
     connection,
     namespace,
     taskQueue,
     workflowsPath,
-    activities: createActivities(db, { emailSender, appUrl }),
+    activities: createActivities(db, { emailSender, appUrl }, credentialCipher),
   });
 }

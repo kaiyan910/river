@@ -1,6 +1,6 @@
-import { randomUUID } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import type { INestApplication } from '@nestjs/common';
-import { connectDatabase, type Database, migrateDatabase } from '@river/db';
+import { connectDatabase, createCredentialCipher, type Database, migrateDatabase } from '@river/db';
 import { RecordingEmailSender } from '@river/email';
 import { createWorker } from '@river/worker';
 import type { Client } from '@temporalio/client';
@@ -101,6 +101,8 @@ export async function startTestApp(): Promise<TestApp> {
   await migrateDatabase(database.db);
 
   const emails = new RecordingEmailSender();
+  // api 加密、worker 解密 Credential 用同一把金鑰；每個測試檔各自產生。
+  const credentialCipher = createCredentialCipher(randomBytes(32).toString('base64'));
   const temporal = await TestWorkflowEnvironment.createTimeSkipping();
   const worker = await createWorker({
     connection: temporal.nativeConnection,
@@ -109,6 +111,7 @@ export async function startTestApp(): Promise<TestApp> {
     db: database.db,
     emailSender: emails,
     appUrl: ORIGIN,
+    credentialCipher,
   });
   const workerRun = worker.run();
 
@@ -125,6 +128,7 @@ export async function startTestApp(): Promise<TestApp> {
     temporal: temporal.client,
     taskQueue: TASK_QUEUE,
     log: { LOG_LEVEL: 'silent', LOG_FORMAT: 'json' },
+    credentialCipher,
   });
   await app.listen(0, '127.0.0.1');
   const baseUrl = await app.getUrl();

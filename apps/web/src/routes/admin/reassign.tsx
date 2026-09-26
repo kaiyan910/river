@@ -1,7 +1,7 @@
 import type { AssigneeRef, MeResponse, MyTask, RequestSummary } from '@river/contracts';
 import { useQuery } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
-import { Ban, ExternalLink, Repeat, UserX } from 'lucide-react';
+import { Ban, ExternalLink, Globe, Repeat, RotateCw, UserX } from 'lucide-react';
 import { type FormEvent, useState } from 'react';
 import { Avatar, Chip, InitiatorAvatar, PersonPicker } from '@/components/people';
 import { toast } from '@/components/toast';
@@ -13,6 +13,7 @@ import {
   pendingReassignQueryOptions,
   useCancelRequest,
   useReassignTask,
+  useRetryRequest,
 } from '@/lib/admin';
 import { directoryQueryOptions } from '@/lib/org';
 import { assigneeLabel, initiatorLabel, requestNumber } from '@/lib/requests';
@@ -32,7 +33,8 @@ type Tab = 'pending' | 'active';
 
 /**
  * 例外處理：左欄是「待 Reassign」清單（直接指派給已停用 Participant 的 open Task）與所有進行中的 Request，
- * 右欄 Reassign Task 或 Cancel Request。`selected` 是 Task id（待 Reassign）或 Request id（進行中）。
+ * 右欄 Reassign Task、重試暫停的 Request（HTTP 節點失敗），或 Cancel Request。
+ * `selected` 是 Task id（待 Reassign）或 Request id（進行中）。
  */
 export function ReassignPage({
   me,
@@ -267,12 +269,21 @@ function ActiveRequestDetail({
   return (
     <div className="mx-auto grid max-w-[720px] gap-5 px-6 py-8">
       <RequestTitle request={request} me={me} />
+      {request.paused && (
+        <PausedCard
+          requestId={request.id}
+          paused={request.paused}
+          canRetry={me.permissions.includes('request.cancel')}
+        />
+      )}
       <Card title="目前的 Task">
         {request.openTasks.length === 0 ? (
           <p className="text-muted-foreground">
             {request.status === 'returned'
               ? '已退回給發起人修改，目前沒有 open 的 Task。'
-              : '處理中，下一步馬上出現。'}
+              : request.paused
+                ? '暫停中，目前沒有 open 的 Task。'
+                : '處理中，下一步馬上出現。'}
           </p>
         ) : (
           <ul className="grid gap-3">
@@ -308,6 +319,57 @@ function ActiveRequestDetail({
         <CancelForm requestId={request.id} onCancelled={onClosed} />
       )}
     </div>
+  );
+}
+
+/**
+ * HTTP 節點重試全部失敗，Request 暫停在這一步：確認外部系統或 Credential 之後重試，或在下面 Cancel。
+ * 失敗原因只有狀態碼或錯誤代碼，不含秘密或回應內容。
+ */
+function PausedCard({
+  requestId,
+  paused,
+  canRetry,
+}: {
+  requestId: string;
+  paused: NonNullable<RequestSummary['paused']>;
+  canRetry: boolean;
+}) {
+  const retry = useRetryRequest();
+  return (
+    <section className="grid gap-3 rounded-xl border border-status-returned/40 p-4">
+      <h2 className="flex items-center gap-1.5 font-semibold text-[0.95em] text-status-returned">
+        <Globe size={14} aria-hidden /> 呼叫外部系統失敗，已暫停
+      </h2>
+      <dl className="grid grid-cols-[6em_1fr] gap-y-1.5 text-[0.95em]">
+        <dt className="text-muted-foreground">步驟</dt>
+        <dd>{paused.nodeName}</dd>
+        <dt className="text-muted-foreground">原因</dt>
+        <dd className="font-mono text-[0.9em]">{paused.reason || '（沒有記錄）'}</dd>
+        <dt className="text-muted-foreground">暫停時間</dt>
+        <dd>{formatTime(paused.at)}</dd>
+      </dl>
+      <p className="text-[0.9em] text-muted-foreground">
+        自動重試後仍然失敗。請確認外部系統恢復、或 Credential
+        已經建立或輪替之後再重試；不需要繼續時可以 Cancel。
+      </p>
+      {canRetry && (
+        <div>
+          <Button
+            size="sm"
+            disabled={retry.isPending}
+            onClick={() =>
+              retry.mutate(requestId, {
+                onSuccess: () => toast(`已重試「${paused.nodeName}」`),
+                onError: (error) => toast(error.message, 'error'),
+              })
+            }
+          >
+            <RotateCw size={13} aria-hidden /> {retry.isPending ? '重試中…' : '重試'}
+          </Button>
+        </div>
+      )}
+    </section>
   );
 }
 

@@ -19,6 +19,8 @@ export const apiEnvSchema = z.object({
         .filter(Boolean),
     ),
   PORT: z.coerce.number().int().default(3000),
+  /** Credential 秘密的 AES-256-GCM 金鑰：base64 的 32 bytes（`openssl rand -base64 32`），worker 用同一把。 */
+  CREDENTIAL_ENCRYPTION_KEY: z.string().min(1),
 });
 
 export type ApiEnv = z.infer<typeof apiEnvSchema>;

@@ -18,12 +18,14 @@ import {
   INTERPRET_PROCESS_WORKFLOW,
   type InterpretProcessInput,
   RESUBMITTED_SIGNAL,
+  RETRY_SIGNAL,
   type ResubmittedSignal,
+  type RetrySignal,
   WITHDRAW_SIGNAL,
 } from '@river/contracts/workflow';
 import { type Database, processVersions, requestEvents, requests } from '@river/db';
 import { Client, WorkflowNotFoundError } from '@temporalio/client';
-import { and, eq, inArray, sql } from 'drizzle-orm';
+import { and, count, eq, inArray, sql } from 'drizzle-orm';
 import { AttachmentsService } from '../attachment/attachments.service.js';
 import type { ActiveParticipant } from '../auth/active-participant.js';
 import { canStart, currentVersions, startFormOf } from '../process/processes.service.js';
@@ -264,6 +266,39 @@ export class RequestsService {
     }
 
     await this.signalEnded(id, CANCEL_SIGNAL);
+    const summary = await this.reads.summary(id);
+    if (!summary) throw new NotFoundException('找不到這筆 Request');
+    return summary;
+  }
+
+  /**
+   * HTTP 節點重試全部失敗、Request 暫停時，Administrator 在確認外部系統或 Credential 之後重試。
+   * 先鎖住 Request（和 pauseForHttp activity 互斥），確認仍在暫停中才寫入 request.retried 事件；
+   * 提交後送出帶著重試次數的 retry Signal，workflow 再呼叫一次暫停中的 HTTP 節點。
+   * 沒有暫停（包括已經重試過、已經結束）時回 409。
+   */
+  async retry(id: string, me: ActiveParticipant): Promise<RequestSummary> {
+    const sequence = await this.db.transaction(async (tx) => {
+      const [request] = await tx
+        .select({ status: requests.status })
+        .from(requests)
+        .where(eq(requests.id, id))
+        .for('update');
+      if (!request) throw new NotFoundException('找不到這筆 Request');
+      if (request.status !== 'running' || !(await this.reads.pausedAt(tx, id)))
+        throw new ConflictException('這筆 Request 沒有暫停，不需要重試。');
+      await tx
+        .insert(requestEvents)
+        .values({ requestId: id, type: 'request.retried', actorId: me.id });
+      const [row] = await tx
+        .select({ count: count() })
+        .from(requestEvents)
+        .where(and(eq(requestEvents.requestId, id), eq(requestEvents.type, 'request.retried')));
+      return row?.count ?? 1;
+    });
+
+    const signal: RetrySignal = { sequence };
+    await this.temporal.workflow.getHandle(id).signal(RETRY_SIGNAL, signal);
     const summary = await this.reads.summary(id);
     if (!summary) throw new NotFoundException('找不到這筆 Request');
     return summary;

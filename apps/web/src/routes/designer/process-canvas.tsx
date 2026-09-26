@@ -39,6 +39,8 @@ import {
   FileText,
   GitFork,
   GitMerge,
+  Globe,
+  KeyRound,
   Mail,
   Split,
   UserCheck,
@@ -63,6 +65,7 @@ export const NODE_ICONS = {
   parallelSplit: GitFork,
   parallelJoin: GitMerge,
   email: Mail,
+  http: Globe,
   end: CircleStop,
 } as const;
 
@@ -96,6 +99,16 @@ function newNode(type: NodeType, position: { x: number; y: number }): ProcessNod
         recipient: null,
         subject: '「{{requestTitle}}」有新的進度',
         message: '{{processName}} 的申請「{{requestTitle}}」有新的進度，請到平台查看。',
+      };
+    case 'http':
+      return {
+        ...base,
+        type,
+        name: '呼叫外部系統',
+        method: 'POST',
+        url: '',
+        body: '',
+        credential: null,
       };
     case 'parallelSplit':
     case 'parallelJoin':
@@ -302,6 +315,9 @@ function NodeCard({ data, selected, type }: NodeProps<RFNode>) {
         <div className="mt-1 text-[0.85em] text-muted-foreground">等所有分支完成才繼續</div>
       )}
       {data.node.type === 'email' && <RecipientLine recipient={data.node.recipient} />}
+      {data.node.type === 'http' && (
+        <HttpLine method={data.node.method} url={data.node.url} credential={data.node.credential} />
+      )}
       {(data.node.type === 'start' || data.node.type === 'form') && (
         <FormLine formId={data.node.formId} required={data.node.type === 'form'} />
       )}
@@ -387,6 +403,38 @@ function RecipientLine({ recipient }: { recipient: EmailRecipient | null }) {
         </div>
       );
   }
+}
+
+/** HTTP 節點的 method、URL 與引用的 Credential 名稱（秘密不會出現在 DSL 裡）。 */
+function HttpLine({
+  method,
+  url,
+  credential,
+}: {
+  method: string;
+  url: string;
+  credential: string | null;
+}) {
+  return (
+    <div className="mt-1 grid gap-0.5 text-[0.85em] text-muted-foreground">
+      {url.trim() ? (
+        <div className="flex items-center gap-1.5">
+          <span className="shrink-0 font-mono text-[0.9em]">{method}</span>
+          <span className="truncate font-mono text-[0.9em]" title={url}>
+            {url}
+          </span>
+        </div>
+      ) : (
+        <div className="text-destructive">未填寫 URL</div>
+      )}
+      {credential && (
+        <div className="flex items-center gap-1.5">
+          <KeyRound size={13} aria-hidden className="shrink-0" />
+          <span className="truncate">{credential}</span>
+        </div>
+      )}
+    </div>
+  );
 }
 
 /** 發起人的 Manager，以及找不到有效 Manager 時接手的 Fallback Role。 */

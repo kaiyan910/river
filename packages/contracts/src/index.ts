@@ -310,6 +310,7 @@ export const processFlowSchema = z.object({
         'parallelSplit',
         'parallelJoin',
         'email',
+        'http',
         'end',
       ]),
       name: z.string(),
@@ -408,6 +409,13 @@ export const requestSummarySchema = z.object({
       at: z.iso.datetime(),
     })
     .nullable(),
+  /**
+   * HTTP 節點重試全部失敗、Request 暫停時：哪一步、原因與時間；等 Administrator 重試或 Cancel。
+   * 沒有暫停時為 null。暫停中的 Request 狀態仍是 running（並行的其他分支照常進行）。
+   */
+  paused: z
+    .object({ nodeId: z.string(), nodeName: z.string(), reason: z.string(), at: z.iso.datetime() })
+    .nullable(),
   createdAt: z.iso.datetime(),
   /** 最後一筆 request_event 的時間。 */
   updatedAt: z.iso.datetime(),
@@ -454,7 +462,10 @@ export const requestEventTypeSchema = z.enum([
   'step.auto_approved',
   'step.branch_chosen',
   'step.email_sent',
+  'step.http_sent',
+  'step.http_failed',
   'request.resubmitted',
+  'request.retried',
   'request.withdrawn',
   'request.cancelled',
   'request.completed',
@@ -488,8 +499,9 @@ export const requestEventSchema = z.object({
    */
   fallbackReason: fallbackReasonSchema.nullable(),
   /**
-   * step.auto_approved：自動核准的審批步驟；step.branch_chosen：做出判斷的條件節點；step.email_sent：寄出信件的 Email 節點。
-   * 這幾種事件沒有 Task；其他為 null。不含自動核准的條件，也不含收件人與信件內容。
+   * step.auto_approved：自動核准的審批步驟；step.branch_chosen：做出判斷的條件節點；step.email_sent：寄出信件的 Email 節點；
+   * step.http_sent、step.http_failed：呼叫成功、重試全部失敗（Request 暫停）的 HTTP 節點，失敗原因在 comment。
+   * 這幾種事件沒有 Task；其他為 null。不含自動核准的條件、收件人與信件內容，也不含 HTTP 的 body、回應與 Credential。
    */
   node: z.object({ id: z.string(), name: z.string() }).nullable(),
   /** step.branch_chosen：條件節點選中的出邊、它的條件，以及走向的節點；其他為 null。 */
@@ -713,3 +725,69 @@ export const externalRequestSchema = z.object({
 });
 export type ExternalRequest = z.infer<typeof externalRequestSchema>;
 export const externalRequestListSchema = z.array(externalRequestSchema);
+
+// ─── Credential ──────────────────────────────────────────────────────────
+
+/** 秘密送出的方式：bearer 放在 `Authorization: Bearer <秘密>`；header 放在自訂的 header（例如 X-API-Key）。 */
+export const credentialSchemeSchema = z.enum(['bearer', 'header']);
+export type CredentialScheme = z.infer<typeof credentialSchemeSchema>;
+
+/** HTTP 節點以名稱引用 Credential，所以名稱建立後不能改；只用英數字、`.`、`_`、`-`。 */
+export const credentialNameSchema = z
+  .string()
+  .trim()
+  .regex(/^[A-Za-z0-9][A-Za-z0-9._-]*$/, '名稱只能用英數字、「.」「_」「-」，並以英數字開頭')
+  .max(100);
+
+/** header 名稱（RFC 9110 的 token）。 */
+const headerNameSchema = z
+  .string()
+  .trim()
+  .regex(/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/, 'header 名稱格式不正確')
+  .max(100);
+
+/** 秘密：只能寫入，API 永遠不回傳。 */
+const secretSchema = z.string().min(1, '請填寫秘密').max(4096);
+
+/** `GET /api/credentials` 的一列：不含秘密。 */
+export const credentialSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  scheme: credentialSchemeSchema,
+  /** scheme 是 header 時的 header 名稱；bearer 時為 null。 */
+  headerName: z.string().nullable(),
+  createdBy: actorSchema,
+  createdAt: z.iso.datetime(),
+  /** 最後一次輪替；建立時與 createdBy、createdAt 相同。 */
+  rotatedBy: actorSchema,
+  rotatedAt: z.iso.datetime(),
+});
+export type Credential = z.infer<typeof credentialSchema>;
+export const credentialListSchema = z.array(credentialSchema);
+
+/** `POST /api/credentials`：建立 Credential；秘密存下之後就不會再顯示。scheme 是 header 時必須填 header 名稱。 */
+export const createCredentialSchema = z
+  .object({
+    name: credentialNameSchema,
+    scheme: credentialSchemeSchema,
+    headerName: headerNameSchema.nullish(),
+    secret: secretSchema,
+  })
+  .refine((v) => v.scheme !== 'header' || !!v.headerName, {
+    path: ['headerName'],
+    message: '請填寫 header 名稱',
+  });
+export type CreateCredentialInput = z.infer<typeof createCredentialSchema>;
+
+/** `PUT /api/credentials/:id/secret`：輪替秘密；下一次呼叫就使用新的秘密，不需要重新發佈 Process。 */
+export const rotateCredentialSchema = z.object({ secret: secretSchema });
+export type RotateCredentialInput = z.infer<typeof rotateCredentialSchema>;
+
+/** `GET /api/credentials/directory`：Designer 在 HTTP 節點挑選 Credential 用，只有名稱與送出方式。 */
+export const credentialDirectoryEntrySchema = credentialSchema.pick({
+  name: true,
+  scheme: true,
+  headerName: true,
+});
+export type CredentialDirectoryEntry = z.infer<typeof credentialDirectoryEntrySchema>;
+export const credentialDirectorySchema = z.array(credentialDirectoryEntrySchema);

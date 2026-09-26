@@ -7,3 +7,5 @@ export const EMAIL_SENDER = Symbol('EMAIL_SENDER');
 export const APP_URL = Symbol('APP_URL');
 /** 附件的 object storage（AttachmentStorage）。 */
 export const ATTACHMENT_STORAGE = Symbol('ATTACHMENT_STORAGE');
+/** Credential 秘密的加解密（AES-256-GCM）；金鑰來自 CREDENTIAL_ENCRYPTION_KEY。 */
+export const CREDENTIAL_CIPHER = Symbol('CREDENTIAL_CIPHER');

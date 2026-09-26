@@ -36,6 +36,13 @@ export const PROCESSES: NavItem = {
   icon: Workflow,
   requires: 'process.edit',
 };
+/** 外部系統的 Credential；credential.manage 不在任何預設組合中，必須單獨授予。 */
+export const CREDENTIALS: NavItem = {
+  to: '/designer/credentials',
+  label: 'Credential',
+  icon: KeyRound,
+  requires: 'credential.manage',
+};
 export const MY_TASKS: NavItem = { to: '/tasks', label: '我的待辦', icon: Inbox };
 export const MY_REQUESTS: NavItem = { to: '/requests', label: '我的申請', icon: FileText };
 /** 看得到的所有 Request：經手過的、Observer Role 的 Process 的；持有 request.view_all 時是全部。 */
@@ -69,7 +76,7 @@ export const SERVICE_ACCOUNTS: NavItem = {
 /** icon rail 的分組；組與組之間以分隔線隔開。 */
 export const NAV_GROUPS: NavItem[][] = [
   [HOME, START_REQUEST, MY_TASKS, MY_REQUESTS, VISIBLE_REQUESTS],
-  [PROCESSES],
+  [PROCESSES, CREDENTIALS],
   [
     PARTICIPANTS,
     ROLES,
@@ -103,6 +110,7 @@ const IMPLEMENTED: NavItem[] = [
   REASSIGN,
   SERVICE_ACCOUNTS,
   PROCESSES,
+  CREDENTIALS,
 ];
 
 /** 還沒有實作內容、先以佔位頁接好路由的導覽項目。 */

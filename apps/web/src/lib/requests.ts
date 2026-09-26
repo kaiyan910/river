@@ -15,9 +15,12 @@ import {
 import { queryOptions, useMutation, useQueryClient } from '@tanstack/react-query';
 import { ApiError, api } from '@/lib/api';
 
-/** workflow 在背景往下一步走的空檔（running 但沒有 open Task）；畫面顯示「處理中」並輪詢。 */
-export function isAdvancing(r: Pick<RequestSummary, 'status' | 'openTasks'>): boolean {
-  return r.status === 'running' && r.openTasks.length === 0;
+/**
+ * workflow 在背景往下一步走的空檔（running 但沒有 open Task）；畫面顯示「處理中」並輪詢。
+ * 暫停中（HTTP 節點失敗，等 Administrator 重試或 Cancel）不算。
+ */
+export function isAdvancing(r: Pick<RequestSummary, 'status' | 'openTasks' | 'paused'>): boolean {
+  return r.status === 'running' && r.openTasks.length === 0 && !r.paused;
 }
 
 const POLL_MS = 1000;

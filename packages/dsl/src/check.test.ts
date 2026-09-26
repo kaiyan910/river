@@ -718,6 +718,67 @@ describe('DSL 檢查', () => {
     });
   });
 
+  describe('HTTP 節點', () => {
+    const http = (
+      overrides: Partial<Extract<ProcessNode, { type: 'http' }>> = {},
+    ): ProcessNode => ({
+      id: 'erp',
+      type: 'http',
+      name: '建立採購單',
+      method: 'POST',
+      url: 'https://erp.internal/api/orders',
+      body: '{ "destination": destination }',
+      credential: 'erp-token',
+      position: at,
+      ...overrides,
+    });
+    const withHttp = (node: ProcessNode): ProcessDsl => ({
+      nodes: [start(), node, end()],
+      edges: [edge('start', 'erp'), edge('erp', 'end')],
+      forms: [],
+    });
+
+    it('URL 與 body 都正確時沒有錯誤；DSL 只存 Credential 名稱', () => {
+      const dsl = withHttp(http());
+      expect(processDslSchema.parse(dsl)).toEqual(dsl);
+      expect(checkProcess(dsl)).toEqual([]);
+    });
+
+    it('Credential 與 body 都是選填', () => {
+      expect(checkProcess(withHttp(http({ credential: null, body: '' })))).toEqual([]);
+    });
+
+    it('沒有 URL', () => {
+      expect(checkProcess(withHttp(http({ url: '  ' })))).toEqual([
+        { nodeId: 'erp', code: 'HTTP_NO_URL', message: expect.stringContaining('建立採購單') },
+      ]);
+    });
+
+    it('URL 不是 http 或 https 的完整網址', () => {
+      for (const url of ['erp.internal/api', 'ftp://erp.internal/x', '/api/orders'])
+        expect(checkProcess(withHttp(http({ url })))).toEqual([
+          { nodeId: 'erp', code: 'HTTP_INVALID_URL', message: expect.stringContaining(url) },
+        ]);
+    });
+
+    it('GET 不能帶 body', () => {
+      expect(checkProcess(withHttp(http({ method: 'GET' })))).toEqual([
+        {
+          nodeId: 'erp',
+          code: 'HTTP_BODY_NOT_ALLOWED',
+          message: expect.stringContaining('GET'),
+        },
+      ]);
+      expect(checkProcess(withHttp(http({ method: 'GET', body: ' ' })))).toEqual([]);
+    });
+
+    it('body 的 JSONata 語法錯誤', () => {
+      expect(checkProcess(withHttp(http({ body: '{ "a": ' })))).toEqual([
+        { nodeId: 'erp', code: 'INVALID_JSONATA', message: expect.stringContaining('建立採購單') },
+      ]);
+    });
+  });
+
   describe('Reminder 與 Escalation', () => {
     /** start → 主管審批（指定的指派對象與逾時設定）→ end */
     const withTimeout = (settings: Partial<Extract<ProcessNode, { type: 'approval' }>>) => {

@@ -69,17 +69,23 @@ export async function roleMemberEmails(db: Database, roleId: string): Promise<st
   return rows.map((r) => r.email);
 }
 
-/** 持有 task.reassign、沒有停用的 Administrator 的 email；「待 Reassign」清單有新項目時通知他們。 */
-export async function reassignerEmails(db: Database): Promise<string[]> {
+/** 持有這個 Permission、沒有停用的 Participant 的 email。 */
+export async function permissionHolderEmails(
+  db: Database,
+  permission: (typeof permissionGrants.$inferSelect)['permission'],
+): Promise<string[]> {
   const rows = await db
     .select({ email: authUsers.email })
     .from(permissionGrants)
     .innerJoin(participants, eq(participants.id, permissionGrants.participantId))
     .innerJoin(authUsers, eq(authUsers.id, participants.userId))
-    .where(
-      and(eq(permissionGrants.permission, 'task.reassign'), isNull(participants.deactivatedAt)),
-    );
+    .where(and(eq(permissionGrants.permission, permission), isNull(participants.deactivatedAt)));
   return rows.map((r) => r.email);
+}
+
+/** 持有 task.reassign 的 Administrator；「待 Reassign」清單有新項目時通知他們。 */
+export function reassignerEmails(db: Database): Promise<string[]> {
+  return permissionHolderEmails(db, 'task.reassign');
 }
 
 /**
@@ -114,8 +120,10 @@ export function taskUrl(appUrl: string, taskId: string): string {
   return new URL(`/tasks?id=${encodeURIComponent(taskId)}`, appUrl).toString();
 }
 
-export function pendingReassignUrl(appUrl: string): string {
-  return new URL('/admin/reassign', appUrl).toString();
+export function pendingReassignUrl(appUrl: string, requestId?: string): string {
+  const url = new URL('/admin/reassign', appUrl);
+  if (requestId) url.searchParams.set('id', requestId);
+  return url.toString();
 }
 
 export function requestUrl(appUrl: string, requestId: string): string {

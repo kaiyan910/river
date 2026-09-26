@@ -22,10 +22,13 @@ import type { EmailMessage } from '../email-sender.js';
  * - returned：Request 被 Return，寄給發起人
  * - completed：Request 完成，寄給發起人
  * - custom：流程裡的 Email 節點，主旨與內文由 Designer 的範本產生（已經代入變數）
+ * - httpFailed：HTTP 節點重試全部失敗、Request 暫停，寄給 Administrator（持有 request.cancel 的人）重試或 Cancel；
+ *   只帶步驟名稱，不含失敗的細節、body 或 Credential
  */
 export type RequestNotification =
   | { kind: 'taskCreated' | 'reminder' | 'escalated' | 'returned' | 'completed' }
-  | { kind: 'custom'; subject: string; message: string };
+  | { kind: 'custom'; subject: string; message: string }
+  | { kind: 'httpFailed'; stepName: string };
 
 /**
  * 信件只能帶這些非敏感的欄位，一律不含 Form 資料：信件會經過外部的寄信服務。
@@ -89,6 +92,17 @@ function contentOf({ requestTitle, processName, notification }: RequestNotificat
         heading: '你的申請已完成',
         paragraphs: [`你的${request}已經完成所有審批。`],
         action: '查看申請',
+      };
+    case 'httpFailed':
+      return {
+        subject: `外部系統呼叫失敗，申請已暫停：${requestTitle}`,
+        preview: `${request}在「${notification.stepName}」呼叫外部系統失敗，已暫停`,
+        heading: '有一筆申請因為外部系統呼叫失敗而暫停',
+        paragraphs: [
+          `${request}在「${notification.stepName}」呼叫外部系統，重試後仍然失敗，申請已暫停。`,
+          '請確認外部系統或 Credential 的狀況後重試，或 Cancel 這筆申請。',
+        ],
+        action: '前往處理',
       };
     case 'custom':
       return {

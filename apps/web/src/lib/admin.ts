@@ -10,7 +10,7 @@ import { queryOptions, useMutation, useQueryClient } from '@tanstack/react-query
 import { api } from '@/lib/api';
 import { participantsQueryOptions } from '@/lib/org';
 
-/** 例外處理：「待 Reassign」清單、尚未結束的 Request、Cancel、Reassign 與停用帳號。 */
+/** 例外處理：「待 Reassign」清單、尚未結束的 Request、Cancel、Reassign、重試暫停的 Request 與停用帳號。 */
 
 export const pendingReassignQueryOptions = queryOptions({
   queryKey: ['admin', 'pending-reassign'],
@@ -50,6 +50,16 @@ export function useCancelRequest() {
         body: { comment: comment.trim() },
         schema: requestSummarySchema,
       }),
+    onSettled: handled,
+  });
+}
+
+/** HTTP 節點重試全部失敗、Request 暫停時重試那一步。 */
+export function useRetryRequest() {
+  const handled = useExceptionHandled();
+  return useMutation({
+    mutationFn: (id: string) =>
+      api(`/requests/${id}/retry`, { method: 'POST', schema: requestSummarySchema }),
     onSettled: handled,
   });
 }

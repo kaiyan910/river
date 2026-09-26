@@ -1,5 +1,7 @@
 import {
   authUsers,
+  type CredentialCipher,
+  credentials,
   type Database,
   type FallbackReason,
   participants,
@@ -12,7 +14,7 @@ import {
   tasks,
 } from '@river/db';
 import { fillEmailTemplate, type ProcessDsl } from '@river/dsl';
-import { chooseBranch, shouldAutoApprove } from '@river/dsl/branch';
+import { chooseBranch, evaluateHttpBody, shouldAutoApprove } from '@river/dsl/branch';
 import { ApplicationFailure, log } from '@temporalio/activity';
 import { and, asc, count, desc, eq, gt, inArray, or, sql } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
@@ -20,6 +22,8 @@ import {
   activeEmails,
   emailRecipients,
   type NotificationDeps,
+  pendingReassignUrl,
+  permissionHolderEmails,
   requestSummary,
   requestUrl,
   roleMemberEmails,
@@ -111,6 +115,26 @@ export interface SendEmailInput {
   visit: number;
 }
 
+export interface HttpRequestInput {
+  requestId: string;
+  processVersionId: string;
+  /** HTTP 節點的 ID。 */
+  nodeId: string;
+  /** 同 EvaluateConditionInput.visit。 */
+  visit: number;
+}
+
+export interface PauseForHttpInput {
+  requestId: string;
+  /** 重試全部失敗的 HTTP 節點。 */
+  nodeId: string;
+  /** 失敗原因（httpRequest 丟出的訊息）：只有狀態碼或錯誤代碼，不含秘密、body 或回應內容。 */
+  reason: string;
+}
+
+/** 單次 HTTP 呼叫的時限；activity 的 startToCloseTimeout 要比它長。 */
+const HTTP_TIMEOUT_MS = 20_000;
+
 const managers = alias(participants, 'managers');
 
 /** interpreter 需要的流程圖；不含 Form schema，Temporal history 裡只有節點與連線。 */
@@ -120,7 +144,11 @@ export type ProcessGraph = Omit<ProcessDsl, 'forms'>;
  * 每個 activity 都要能安全重試：寫入 Task 與 request_events 在同一個 transaction，
  * 而且只有真的改變狀態時才寫事件。
  */
-export function createActivities(db: Database, notification: NotificationDeps) {
+export function createActivities(
+  db: Database,
+  notification: NotificationDeps,
+  cipher: CredentialCipher,
+) {
   return {
     async checkDatabase(): Promise<void> {
       await db.execute(sql`select 1`);
@@ -364,6 +392,133 @@ export function createActivities(db: Database, notification: NotificationDeps) {
     },
 
     /**
+     * HTTP 節點：從 Postgres 讀取這一輪的 Form 資料，以 JSONata 組成 body，需要時才讀取並解密 Credential，送出請求。
+     * Form 資料、body、秘密與回應都只存在這個 activity 裡：輸入只有 ID，沒有回傳值，
+     * 丟出的錯誤訊息只有狀態碼或錯誤代碼，所以 Temporal history 裡找不到它們。
+     * 每次執行都重新讀取 Credential，輪替後下一次呼叫就用新的秘密。
+     *
+     * 2xx 才算成功；Request 仍是 running 才寫入 step.http_sent 事件。重試由 workflow 的 retry policy 負責：
+     * 連線失敗、逾時、5xx、408、429 可以重試；其他 4xx、找不到或解不開 Credential、body 算不出來時重試也沒用，直接失敗。
+     * 重試時，這一輪第 visit 次走到這一步已經寫入事件就不再送出；送出後、寫入前失敗的話會重複送出（至少一次）。
+     * 不跟隨轉址，免得認證 header 被送到別的主機。
+     */
+    async httpRequest(input: HttpRequestInput): Promise<void> {
+      if ((await earlierVisit(db, input))?.type === 'step.http_sent') return;
+      const [request] = await db
+        .select({ status: requests.status })
+        .from(requests)
+        .where(eq(requests.id, input.requestId));
+      // API 在提交 transaction 之前就啟動 workflow：讀不到 Request 時重試。
+      if (!request) throw new Error(`找不到 Request ${input.requestId}`);
+      if (request.status !== 'running') return;
+      const { dsl, data } = await loadRound(db, input);
+      const node = dsl.nodes.find((n) => n.id === input.nodeId);
+      if (node?.type !== 'http')
+        throw ApplicationFailure.nonRetryable(`找不到 HTTP 節點 ${input.nodeId}`);
+
+      let body: unknown;
+      try {
+        body = await evaluateHttpBody(node.body, data);
+      } catch (error) {
+        // 只記錄 JSONata 的錯誤代碼，不記錄可能含有 Form 資料的錯誤訊息。
+        throw ApplicationFailure.nonRetryable(
+          `body 的 JSONata 表達式執行失敗（${String(jsonataErrorCode(error) ?? '未知錯誤')}）`,
+        );
+      }
+      const headers: Record<string, string> = { accept: 'application/json' };
+      if (body !== undefined) headers['content-type'] = 'application/json';
+      if (node.credential)
+        Object.assign(headers, await credentialHeader(db, cipher, node.credential));
+
+      let response: Response;
+      try {
+        response = await fetch(node.url, {
+          method: node.method,
+          headers,
+          body: body === undefined ? undefined : JSON.stringify(body),
+          redirect: 'manual',
+          signal: AbortSignal.timeout(HTTP_TIMEOUT_MS),
+        });
+      } catch (error) {
+        // fetch 的錯誤只留下錯誤代碼（例如 ECONNREFUSED、TimeoutError），可以重試。
+        throw ApplicationFailure.retryable(`無法連線到外部系統（${networkErrorCode(error)}）`);
+      }
+      // 不讀取回應內容（MVP 不寫回 Request 資料），只釋放連線。
+      await response.body?.cancel().catch(() => {});
+      if (!response.ok) {
+        const message = `外部系統回應 HTTP ${response.status}`;
+        const retryable =
+          response.status >= 500 || response.status === 408 || response.status === 429;
+        throw retryable
+          ? ApplicationFailure.retryable(message)
+          : ApplicationFailure.nonRetryable(message);
+      }
+
+      await db.transaction(async (tx) => {
+        const [locked] = await tx
+          .select({ status: requests.status })
+          .from(requests)
+          .where(eq(requests.id, input.requestId))
+          .for('update');
+        if (locked?.status !== 'running') return;
+        if ((await earlierVisit(tx, input))?.type === 'step.http_sent') return;
+        await tx.insert(requestEvents).values({
+          requestId: input.requestId,
+          type: 'step.http_sent',
+          nodeId: input.nodeId,
+        });
+      });
+    },
+
+    /**
+     * HTTP 節點重試全部失敗：Request 暫停在這一步。Request 仍是 running 才寫入 step.http_failed 事件（原因記在 comment），
+     * 並寄信通知 Administrator（持有 request.cancel 的人）到例外處理頁重試或 Cancel；寄信失敗不影響暫停。
+     * 回傳這筆 Request 到目前為止重試過幾次（request.retried 的數量）：workflow 等到 retry Signal 的 sequence 比它大才重試。
+     * 讀取次數與寫入事件都在鎖住 Request 之後，和 API 的重試互斥，所以不會漏掉緊接著送來的重試。
+     * 重試時這個節點已經暫停（最後一筆暫停或重試的紀錄就是它的 step.http_failed）就不再寫入、不再寄信。
+     */
+    async pauseForHttp(input: PauseForHttpInput): Promise<number> {
+      const result = await db.transaction(async (tx) => {
+        const [request] = await tx
+          .select({ status: requests.status })
+          .from(requests)
+          .where(eq(requests.id, input.requestId))
+          .for('update');
+        if (!request) throw new Error(`找不到 Request ${input.requestId}`);
+        const retries = await retryCount(tx, input.requestId);
+        if (request.status !== 'running') return { retries, paused: false };
+        const [last] = await tx
+          .select({ type: requestEvents.type, nodeId: requestEvents.nodeId })
+          .from(requestEvents)
+          .where(
+            and(
+              eq(requestEvents.requestId, input.requestId),
+              inArray(requestEvents.type, PAUSE_EVENTS),
+            ),
+          )
+          .orderBy(desc(requestEvents.id))
+          .limit(1);
+        if (last?.type === 'step.http_failed' && last.nodeId === input.nodeId)
+          return { retries, paused: false };
+        await tx.insert(requestEvents).values({
+          requestId: input.requestId,
+          type: 'step.http_failed',
+          nodeId: input.nodeId,
+          comment: input.reason.slice(0, 500),
+        });
+        return { retries, paused: true };
+      });
+      if (result.paused) {
+        try {
+          await notifyHttpFailed(db, notification, input);
+        } catch (error) {
+          log.warn('HTTP 失敗通知寄送失敗，略過', { requestId: input.requestId, error });
+        }
+      }
+      return result.retries;
+    },
+
+    /**
      * Reminder：寄信提醒 Task 目前的處理人（指派給 Role 時寄給每一位成員），不改變 Task 由誰負責。
      * 寄出後，Task 仍是 open 才寫入 task.reminded 事件。Task 已經處理或作廢、Request 已經不是 running 時不寄。
      * 重試時，這個 Task 已經有 sequence 筆 task.reminded 就不再寄；寄出後、寫入前失敗的話會重複寄出，但不會漏寄。
@@ -529,6 +684,80 @@ async function deactivatedAssignee(
   return row?.deactivatedAt ? { name: row.name } : undefined;
 }
 
+/** 判斷 Request 是否暫停用的事件：最後一筆是 step.http_failed 就是暫停中（重試或重新送出後就不是）。 */
+const PAUSE_EVENTS: RequestEventType[] = [
+  'step.http_failed',
+  'request.retried',
+  'request.resubmitted',
+];
+
+/** 這筆 Request 被 Administrator 重試過幾次。 */
+async function retryCount(db: Database | Tx, requestId: string): Promise<number> {
+  const [row] = await db
+    .select({ count: count() })
+    .from(requestEvents)
+    .where(and(eq(requestEvents.requestId, requestId), eq(requestEvents.type, 'request.retried')));
+  return row?.count ?? 0;
+}
+
+/**
+ * 依名稱讀取 Credential 並解密成認證 header。每次呼叫都重新讀取，所以輪替後立刻生效。
+ * 找不到或解不開時重試也沒用：丟出不可重試的錯誤，Request 暫停，建立或輪替 Credential 後由 Administrator 重試。
+ * 錯誤訊息只有 Credential 名稱。
+ */
+async function credentialHeader(
+  db: Database,
+  cipher: CredentialCipher,
+  name: string,
+): Promise<Record<string, string>> {
+  const [row] = await db.select().from(credentials).where(eq(credentials.name, name));
+  if (!row) throw ApplicationFailure.nonRetryable(`找不到 Credential「${name}」`);
+  let secret: string;
+  try {
+    secret = cipher.decrypt(row.id, row.secret);
+  } catch {
+    throw ApplicationFailure.nonRetryable(
+      `Credential「${name}」無法解密（加密金鑰可能已更換），請重新輪替`,
+    );
+  }
+  return row.scheme === 'bearer'
+    ? { authorization: `Bearer ${secret}` }
+    : { [row.headerName ?? 'x-api-key']: secret };
+}
+
+/** fetch 失敗時的錯誤代碼（例如 ECONNREFUSED、TimeoutError）；不帶可能含有網址參數的完整訊息。 */
+function networkErrorCode(error: unknown): string {
+  const { name, cause } = (error ?? {}) as { name?: unknown; cause?: { code?: unknown } };
+  if (typeof cause?.code === 'string') return cause.code;
+  return typeof name === 'string' ? name : '未知錯誤';
+}
+
+/** HTTP 節點暫停：寄給每一位持有 request.cancel 的 Administrator，連結開到例外處理頁的這筆 Request。 */
+async function notifyHttpFailed(
+  db: Database,
+  notification: NotificationDeps,
+  input: PauseForHttpInput,
+): Promise<void> {
+  const request = await requestSummary(db, input.requestId);
+  if (!request) return;
+  const [version] = await db
+    .select({ dsl: processVersions.dsl })
+    .from(requests)
+    .innerJoin(processVersions, eq(processVersions.id, requests.processVersionId))
+    .where(eq(requests.id, input.requestId));
+  const stepName = version?.dsl.nodes.find((n) => n.id === input.nodeId)?.name ?? input.nodeId;
+  await sendToEach(
+    notification,
+    await permissionHolderEmails(db, 'request.cancel'),
+    {
+      requestTitle: request.title,
+      processName: request.processName,
+      url: pendingReassignUrl(notification.appUrl, input.requestId),
+    },
+    { kind: 'httpFailed', stepName },
+  );
+}
+
 /** 這個 Task 已經寄過幾次 Reminder。 */
 async function reminderCount(db: Database | Tx, taskId: string): Promise<number> {
   const [row] = await db
@@ -544,7 +773,8 @@ function jsonataErrorCode(error: unknown): unknown {
 }
 
 /**
- * 這一輪第 input.visit 次走到這個節點時留下的紀錄：條件的判斷、自動核准、寄出的 Email，或為它建立的 Task；
+ * 這一輪第 input.visit 次走到這個節點時留下的紀錄：條件的判斷、自動核准、寄出的 Email、成功的 HTTP 呼叫，
+ * 或為它建立的 Task；
  * 還沒有時為 undefined。
  * 並行分支上其他分支隨時會寫入事件，所以不能只看 Request 的最後一筆事件，而是只數這個節點自己的紀錄。
  * 條件節點每次判斷都會寫入事件；審批節點每次不是自動核准，就是建立了 Task，所以第幾次一定對得上。
@@ -590,6 +820,7 @@ async function earlierVisit(
               'step.branch_chosen',
               'step.auto_approved',
               'step.email_sent',
+              'step.http_sent',
             ]),
             eq(requestEvents.nodeId, input.nodeId),
           ),

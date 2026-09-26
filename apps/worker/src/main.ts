@@ -1,4 +1,4 @@
-import { connectDatabase } from '@river/db';
+import { connectDatabase, createCredentialCipher } from '@river/db';
 import { createEmailSender, emailEnvSchema } from '@river/email';
 import { createLogger, loggerEnvSchema } from '@river/logger';
 import { makeTelemetryFilterString, NativeConnection, Runtime } from '@temporalio/worker';
@@ -14,6 +14,8 @@ const env = z
     TEMPORAL_TASK_QUEUE: z.string().default('river'),
     /** 瀏覽器看到的網址（和 api 共用同一個設定），信件裡的連結以它為準。 */
     BETTER_AUTH_URL: z.url(),
+    /** Credential 秘密的 AES-256-GCM 金鑰（和 api 同一把），HTTP 節點在 activity 內解密。 */
+    CREDENTIAL_ENCRYPTION_KEY: z.string().min(1),
   })
   .parse(process.env);
 const emailEnv = emailEnvSchema.parse(process.env);
@@ -35,6 +37,7 @@ const worker = await createWorker({
   db: database.db,
   emailSender: createEmailSender(emailEnv),
   appUrl: env.BETTER_AUTH_URL,
+  credentialCipher: createCredentialCipher(env.CREDENTIAL_ENCRYPTION_KEY),
 });
 
 logger.info({ taskQueue: env.TEMPORAL_TASK_QUEUE }, 'worker started');

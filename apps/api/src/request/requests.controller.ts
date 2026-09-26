@@ -145,6 +145,17 @@ export class RequestsController {
   ): Promise<RequestSummary> {
     return this.requests.cancel(id, body, me);
   }
+
+  /** HTTP 節點重試全部失敗、Request 暫停時，Administrator 重試；也可以改用 Cancel 結束它。 */
+  @Post(':id/retry')
+  @HttpCode(200)
+  @RequirePermission('request.cancel')
+  @ApiOkResponse({ type: RequestSummaryDto })
+  @ApiNotFoundResponse({ description: 'Request 不存在' })
+  @ApiConflictResponse({ description: 'Request 沒有暫停' })
+  retry(@Id() id: string, @CurrentParticipant() me: ActiveParticipant): Promise<RequestSummary> {
+    return this.requests.retry(id, me);
+  }
 }
 
 /** 「我的待辦」與完成 Task；以及 Administrator 的「待 Reassign」清單與 Reassign。 */

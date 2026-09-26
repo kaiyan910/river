@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { chooseBranch, shouldAutoApprove } from './branch.js';
+import { chooseBranch, evaluateHttpBody, shouldAutoApprove } from './branch.js';
 import type { ProcessEdge } from './schema.js';
 
 const when = (id: string, expression: string): ProcessEdge => ({
@@ -77,5 +77,23 @@ describe('判斷是否自動核准', () => {
 
   it('語法錯誤時不自動核准', async () => {
     expect(await shouldAutoApprove('amount <', { amount: 1 })).toBe(false);
+  });
+});
+
+describe('HTTP 節點的 body', () => {
+  const data = { destination: '台中', amount: 1200, items: [{ name: '高鐵' }, { name: '住宿' }] };
+
+  it('以 JSONata 從 Request 資料組成 body', async () => {
+    await expect(
+      evaluateHttpBody('{ "to": destination, "total": amount * 2, "items": items.name }', data),
+    ).resolves.toEqual({ to: '台中', total: 2400, items: ['高鐵', '住宿'] });
+  });
+
+  it('空白的表達式代表沒有 body', async () => {
+    await expect(evaluateHttpBody('  ', data)).resolves.toBeUndefined();
+  });
+
+  it('執行時出錯就丟出錯誤，不當作空的 body 送出', async () => {
+    await expect(evaluateHttpBody('amount + destination', data)).rejects.toBeDefined();
   });
 });

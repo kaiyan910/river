@@ -34,6 +34,13 @@ import { DATABASE } from '../tokens.js';
 import { assignedTo, taskAssignee } from './task-access.js';
 
 type TaskRow = typeof tasks.$inferSelect;
+type Tx = Parameters<Parameters<Database['transaction']>[0]>[0];
+
+/**
+ * 判斷暫停用的事件：HTTP 節點重試全部失敗時寫入 step.http_failed，Administrator 重試寫入 request.retried，
+ * 重新送出（從頭再跑）寫入 request.resubmitted。最後一筆是 step.http_failed、而且 Request 仍是 running 就是暫停中。
+ */
+const PAUSE_EVENTS = ['step.http_failed', 'request.retried', 'request.resubmitted'] as const;
 
 const actor = (names: Names, id: string) => ({ id, name: names.people.get(id) ?? '' });
 const iso = (d: Date) => d.toISOString();
@@ -104,9 +111,35 @@ export class RequestReads {
     return this.summaries(inArray(requests.status, ['running', 'returned']));
   }
 
+  /** Request 暫停在哪一個 HTTP 節點（最後一筆 step.http_failed）；沒有暫停時為 undefined。不檢查 Request 的狀態。 */
+  async pausedAt(
+    db: Database | Tx,
+    requestId: string,
+  ): Promise<{ nodeId: string; reason: string; at: Date } | undefined> {
+    const [last] = await db
+      .select({
+        type: requestEvents.type,
+        nodeId: requestEvents.nodeId,
+        comment: requestEvents.comment,
+        at: requestEvents.at,
+      })
+      .from(requestEvents)
+      .where(
+        and(eq(requestEvents.requestId, requestId), inArray(requestEvents.type, [...PAUSE_EVENTS])),
+      )
+      .orderBy(desc(requestEvents.id))
+      .limit(1);
+    if (last?.type !== 'step.http_failed' || !last.nodeId) return undefined;
+    return { nodeId: last.nodeId, reason: last.comment ?? '', at: last.at };
+  }
+
   async summary(requestId: string): Promise<RequestSummary | undefined> {
     const [summary] = await this.summaries(eq(requests.id, requestId));
     return summary;
+  }
+
+  private pausedOf(running: { id: string }[]) {
+    return pausedOfRows(this.db, running);
   }
 
   private async tasksWhere(where: SQL | undefined, order: SQL): Promise<MyTask[]> {
@@ -304,6 +337,7 @@ export class RequestReads {
       ...open.map(taskAssignee),
       ...returnedTasks.flatMap(taskPeople),
     ]);
+    const paused = await this.pausedOf(rows.filter((r) => r.status === 'running'));
     return rows.map((r) => {
       const serviceAccount = r.serviceAccountId
         ? { id: r.serviceAccountId, name: r.serviceAccountName ?? '' }
@@ -334,11 +368,56 @@ export class RequestReads {
           returnedTasks.find((t) => t.requestId === r.id),
           names,
         ),
+        paused: paused.get(r.id) ?? null,
         createdAt: iso(r.createdAt),
         updatedAt: iso(r.updatedAt ?? r.createdAt),
       };
     });
   }
+}
+
+/** 暫停中的 Request（見 PAUSE_EVENTS）：停在哪一步、原因與時間。 */
+async function pausedOfRows(
+  db: Database,
+  running: { id: string }[],
+): Promise<Map<string, NonNullable<RequestSummary['paused']>>> {
+  const result = new Map<string, NonNullable<RequestSummary['paused']>>();
+  if (running.length === 0) return result;
+  const events = await db
+    .select({
+      requestId: requestEvents.requestId,
+      type: requestEvents.type,
+      nodeId: requestEvents.nodeId,
+      comment: requestEvents.comment,
+      at: requestEvents.at,
+      dsl: processVersions.dsl,
+    })
+    .from(requestEvents)
+    .innerJoin(requests, eq(requests.id, requestEvents.requestId))
+    .innerJoin(processVersions, eq(processVersions.id, requests.processVersionId))
+    .where(
+      and(
+        inArray(
+          requestEvents.requestId,
+          running.map((r) => r.id),
+        ),
+        inArray(requestEvents.type, [...PAUSE_EVENTS]),
+      ),
+    )
+    .orderBy(desc(requestEvents.id));
+  const seen = new Set<string>();
+  for (const e of events) {
+    if (seen.has(e.requestId)) continue;
+    seen.add(e.requestId);
+    if (e.type !== 'step.http_failed' || !e.nodeId) continue;
+    result.set(e.requestId, {
+      nodeId: e.nodeId,
+      nodeName: e.dsl.nodes.find((n) => n.id === e.nodeId)?.name ?? e.nodeId,
+      reason: e.comment ?? '',
+      at: iso(e.at),
+    });
+  }
+  return result;
 }
 
 function returnedOf(t: TaskRow | undefined, names: Names): RequestSummary['returned'] {

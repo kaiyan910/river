@@ -1,7 +1,7 @@
 # 本機開發環境
 
 ```sh
-cp .env.example .env                          # 填入 BETTER_AUTH_SECRET 等值
+cp .env.example .env                          # 填入 BETTER_AUTH_SECRET、CREDENTIAL_ENCRYPTION_KEY 等值
 docker compose -f deploy/compose.yaml up -d   # Postgres、Temporal、temporal-ui、Garage、Mailpit、Caddy
 bun install
 bun run db:migrate

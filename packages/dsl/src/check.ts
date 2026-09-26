@@ -30,6 +30,9 @@ export const DSL_ERROR_CODES = [
   'EMAIL_NO_RECIPIENT',
   'EMAIL_NO_SUBJECT',
   'EMAIL_UNKNOWN_VARIABLE',
+  'HTTP_NO_URL',
+  'HTTP_INVALID_URL',
+  'HTTP_BODY_NOT_ALLOWED',
   ...FORM_ERROR_CODES,
 ] as const;
 export type DslErrorCode = (typeof DSL_ERROR_CODES)[number];
@@ -236,6 +239,40 @@ export function checkProcess(dsl: ProcessDsl): DslError[] {
     }
   }
 
+  for (const node of dsl.nodes) {
+    if (node.type !== 'http') continue;
+    const url = node.url.trim();
+    if (!url)
+      errors.push({
+        nodeId: node.id,
+        code: 'HTTP_NO_URL',
+        message: `HTTP「${node.name}」還沒有填寫 URL。`,
+      });
+    else if (!isHttpUrl(url))
+      errors.push({
+        nodeId: node.id,
+        code: 'HTTP_INVALID_URL',
+        message: `HTTP「${node.name}」的 URL「${url}」不是 http:// 或 https:// 開頭的完整網址。`,
+      });
+    const body = node.body.trim();
+    if (!body) continue;
+    if (node.method === 'GET') {
+      errors.push({
+        nodeId: node.id,
+        code: 'HTTP_BODY_NOT_ALLOWED',
+        message: `HTTP「${node.name}」使用 GET，不能帶 body。`,
+      });
+      continue;
+    }
+    const syntaxError = jsonataSyntaxError(body);
+    if (syntaxError)
+      errors.push({
+        nodeId: node.id,
+        code: 'INVALID_JSONATA',
+        message: `HTTP「${node.name}」body 的 JSONata 表達式有語法錯誤：${syntaxError}`,
+      });
+  }
+
   const formIds = new Set(dsl.forms.map((f) => f.id));
   for (const node of dsl.nodes) {
     if (node.type === 'form') {
@@ -371,4 +408,9 @@ function jsonataSyntaxError(expression: string): string | null {
     const text = typeof message === 'string' ? message : '無法解析';
     return typeof position === 'number' ? `${text}（第 ${position} 個字元）` : text;
   }
+}
+
+/** http:// 或 https:// 開頭、有主機名稱、沒有空白的網址。這個 package 不依賴 DOM 或 Node，所以不用 URL。 */
+function isHttpUrl(value: string): boolean {
+  return /^https?:\/\/[^\s/?#@]+(?:[/?#]\S*)?$/i.test(value);
 }

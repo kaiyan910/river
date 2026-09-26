@@ -4,6 +4,7 @@ import { migrate } from 'drizzle-orm/node-postgres/migrator';
 import pg from 'pg';
 import * as schema from './schema.js';
 
+export * from './credential-cipher.js';
 export * from './schema.js';
 export { schema };
 

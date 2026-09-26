@@ -3,7 +3,7 @@ import { z } from 'zod';
 
 /**
  * Process DSL：以節點與邊組成的有向圖，以 JSON 儲存。
- * 目前有 start、form、approval、condition、parallelSplit、parallelJoin、email、end。
+ * 目前有 start、form、approval、condition、parallelSplit、parallelJoin、email、http、end。
  * Form 屬於 Process，跟流程圖放在同一份 DSL，發佈時一起存成 Process Version 的快照。
  */
 
@@ -144,6 +144,25 @@ export const emailNodeSchema = z.object({
   message: z.string().max(2000),
 });
 
+export const HTTP_METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'] as const;
+export type HttpMethod = (typeof HTTP_METHODS)[number];
+
+/**
+ * HTTP 節點：流程走到這裡時呼叫另一個內部系統，成功（2xx）後直接往下走；回應內容不寫回 Request 資料。
+ * body 是 JSONata 表達式，用欄位代碼讀取這一輪填過的 Form 資料，結果以 JSON 送出；空白代表不帶 body。
+ * credential 是 Credential 的名稱（選填）：DSL 只存名稱，秘密在執行時才由 activity 解密，
+ * 所以輪替 Credential 不需要重新發佈 Process。
+ * 草稿中 URL 可以是空白、body 可以有語法錯誤，發佈前由檢查器擋下。
+ */
+export const httpNodeSchema = z.object({
+  ...nodeBase,
+  type: z.literal('http'),
+  method: z.enum(HTTP_METHODS),
+  url: z.string().max(2000),
+  body: z.string().max(5000),
+  credential: z.string().min(1).max(100).nullable(),
+});
+
 export const processNodeSchema = z.discriminatedUnion('type', [
   startNodeSchema,
   formNodeSchema,
@@ -152,6 +171,7 @@ export const processNodeSchema = z.discriminatedUnion('type', [
   parallelSplitNodeSchema,
   parallelJoinNodeSchema,
   emailNodeSchema,
+  httpNodeSchema,
   endNodeSchema,
 ]);
 export type ProcessNode = z.infer<typeof processNodeSchema>;
@@ -203,17 +223,18 @@ export interface GraphShape {
 }
 
 /**
- * 由系統自動處理、不是 Participant 會經過的一步的節點（條件、並行分支、並行匯合、Email）：
+ * 由系統自動處理、不是 Participant 會經過的一步的節點（條件、並行分支、並行匯合、Email、HTTP）：
  * 流程預覽不列出，畫布與流程圖上畫成虛線框。
  */
 export function isSystemNode<T extends { type: NodeType }>(
   node: T,
-): node is Extract<T, { type: 'condition' | 'parallelSplit' | 'parallelJoin' | 'email' }> {
+): node is Extract<T, { type: 'condition' | 'parallelSplit' | 'parallelJoin' | 'email' | 'http' }> {
   return (
     node.type === 'condition' ||
     node.type === 'parallelSplit' ||
     node.type === 'parallelJoin' ||
-    node.type === 'email'
+    node.type === 'email' ||
+    node.type === 'http'
   );
 }
 
@@ -225,6 +246,7 @@ export const NODE_TYPE_LABELS: Record<NodeType, string> = {
   parallelSplit: '並行分支',
   parallelJoin: '並行匯合',
   email: 'Email',
+  http: 'HTTP',
   end: '結束',
 };
 
