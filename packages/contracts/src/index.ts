@@ -600,3 +600,4 @@ export const deactivationImpactSchema = z.object({
   directReports: directorySchema,
 });
 export type DeactivationImpact = z.infer<typeof deactivationImpactSchema>;
+export * from './attachments.js';

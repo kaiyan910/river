@@ -31,6 +31,7 @@ import {
 } from '@river/db';
 import { Client, WorkflowNotFoundError } from '@temporalio/client';
 import { and, eq, sql } from 'drizzle-orm';
+import { AttachmentsService } from '../attachment/attachments.service.js';
 import type { ActiveParticipant } from '../auth/active-participant.js';
 import { formOf, participantNames } from '../process/processes.service.js';
 import { DATABASE, TEMPORAL_CLIENT } from '../tokens.js';
@@ -45,6 +46,7 @@ export class TasksService {
     @Inject(DATABASE) private readonly db: Database,
     @Inject(TEMPORAL_CLIENT) private readonly temporal: Client,
     private readonly reads: RequestReads,
+    private readonly attachments: AttachmentsService,
   ) {}
 
   mine(me: ActiveParticipant, status: MyTasksStatus): Promise<MyTask[]> {
@@ -94,7 +96,13 @@ export class TasksService {
             task.dsl.nodes.find((n) => n.id === task.nodeId),
           )
         : null;
-    const submission = validateStepData(form, input.data);
+    const submission = validateStepData(
+      form,
+      await this.attachments.resolve(form, input.data, {
+        submitterId: me.id,
+        requestId: task.requestId,
+      }),
+    );
 
     const comment = input.comment || null;
     const requestId = await this.db.transaction(async (tx) => {

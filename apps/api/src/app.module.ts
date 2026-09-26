@@ -8,6 +8,8 @@ import type { Client } from '@temporalio/client';
 import { AuthModule } from '@thallesp/nestjs-better-auth';
 import { LoggerModule } from 'nestjs-pino';
 import { ZodValidationPipe } from 'nestjs-zod';
+import { AttachmentModule } from './attachment/attachment.module.js';
+import type { AttachmentStorage } from './attachment/attachment-storage.js';
 import type { Auth } from './auth/create-auth.js';
 import { HealthController } from './health/health.controller.js';
 import { OrgModule } from './org/org.module.js';
@@ -15,6 +17,7 @@ import { ProcessModule } from './process/process.module.js';
 import { RequestModule } from './request/request.module.js';
 import {
   APP_URL,
+  ATTACHMENT_STORAGE,
   AUTH,
   DATABASE,
   EMAIL_SENDER,
@@ -29,6 +32,8 @@ export interface AppDeps {
   emailSender: EmailSender;
   /** 瀏覽器看到的網址，例如 https://river.example.com；邀請信的連結以它為準。 */
   appUrl: string;
+  /** 附件的 object storage（Garage）；API 只發 presigned URL 與確認檔案已上傳。 */
+  storage: AttachmentStorage;
   temporal: Client;
   taskQueue: string;
   log: LoggerEnv;
@@ -45,10 +50,19 @@ class InfrastructureModule {
         { provide: AUTH, useValue: deps.auth },
         { provide: EMAIL_SENDER, useValue: deps.emailSender },
         { provide: APP_URL, useValue: deps.appUrl },
+        { provide: ATTACHMENT_STORAGE, useValue: deps.storage },
         { provide: TEMPORAL_CLIENT, useValue: deps.temporal },
         { provide: TEMPORAL_TASK_QUEUE, useValue: deps.taskQueue },
       ],
-      exports: [DATABASE, AUTH, EMAIL_SENDER, APP_URL, TEMPORAL_CLIENT, TEMPORAL_TASK_QUEUE],
+      exports: [
+        DATABASE,
+        AUTH,
+        EMAIL_SENDER,
+        APP_URL,
+        ATTACHMENT_STORAGE,
+        TEMPORAL_CLIENT,
+        TEMPORAL_TASK_QUEUE,
+      ],
     };
   }
 }
@@ -74,6 +88,7 @@ export class AppModule {
         OrgModule,
         ProcessModule,
         RequestModule,
+        AttachmentModule,
       ],
       controllers: [HealthController],
       providers: [{ provide: APP_PIPE, useClass: ZodValidationPipe }],

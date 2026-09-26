@@ -339,3 +339,30 @@ export const requestData = pgTable(
   },
   (t) => [unique().on(t.requestId, t.nodeId, t.round)],
 );
+
+/**
+ * 附件：檔案存在 S3 相容的 object storage（Garage），這裡只記錄中繼資料。
+ * 瀏覽器先向 API 取得 presigned 上傳 URL，再直接上傳；送出表單時 API 確認檔案已上傳，才把附件綁到 Request。
+ * request_id 為 null 代表還沒隨表單送出，只有上傳的人可以下載；綁定後看得到該 Request 的人才能下載。
+ * 檔案內容與下載 URL 都不進入 Temporal。
+ */
+export const attachments = pgTable(
+  'attachments',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    /** bucket 裡的 object key。 */
+    storageKey: text('storage_key').notNull().unique(),
+    fileName: text('file_name').notNull(),
+    contentType: text('content_type').notNull(),
+    /** bytes；上傳 URL 簽入這個大小，送出表單時再和實際上傳的 object 比對。 */
+    size: bigint('size', { mode: 'number' }).notNull(),
+    uploadedBy: uuid('uploaded_by')
+      .notNull()
+      .references(() => participants.id),
+    requestId: uuid('request_id').references(() => requests.id),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    /** 送出表單時確認 object 已上傳（大小相符）的時間。 */
+    uploadedAt: timestamp('uploaded_at', { withTimezone: true }),
+  },
+  (t) => [index().on(t.requestId), index().on(t.uploadedBy)],
+);

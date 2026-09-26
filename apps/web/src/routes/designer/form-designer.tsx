@@ -17,6 +17,8 @@ import {
 import { CSS } from '@dnd-kit/utilities';
 import { type DslError, NODE_TYPE_LABELS, type NodeType } from '@river/dsl';
 import {
+  ATTACHMENT_MAX_FILES,
+  ATTACHMENT_MAX_SIZE_MB,
   FIELD_KEY_PATTERN,
   FIELD_TYPE_LABELS,
   FIELD_TYPES,
@@ -24,6 +26,7 @@ import {
   type FieldType,
   type FormField,
   type FormSchema,
+  normalizeAccept,
   todayIn,
   validateFormData,
 } from '@river/forms';
@@ -38,12 +41,14 @@ import {
   GripVertical,
   Hash,
   ListChecks,
+  Paperclip,
   Plus,
   Text,
   TextCursorInput,
   Trash2,
 } from 'lucide-react';
 import { type ReactNode, useState } from 'react';
+import { AttachmentTransportProvider, previewTransport } from '@/components/attachment-field';
 import { FormDataView, FormRunner } from '@/components/form-fields';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -59,6 +64,7 @@ export const FIELD_ICONS: Record<FieldType, typeof Text> = {
   radio: CircleDot,
   multiselect: ListChecks,
   checkbox: CheckSquare,
+  attachment: Paperclip,
 };
 
 /** 可以指定 Form 的節點（開始、填表）。 */
@@ -104,6 +110,11 @@ export function describeRules(f: FormField): string[] {
   if (r.max !== undefined) out.push(`≤ ${r.max.toLocaleString()}`);
   if (r.notPast) out.push('不早於今天');
   if (r.maxSelected) out.push(`最多選 ${r.maxSelected} 項`);
+  if (f.type === 'attachment') {
+    if (r.accept?.length) out.push(r.accept.join(' '));
+    if (r.maxSizeMb) out.push(`每個 ≤ ${r.maxSizeMb} MB`);
+    if (r.maxFiles) out.push(`最多 ${r.maxFiles} 個`);
+  }
   if (f.type === 'radio' || f.type === 'multiselect')
     out.push(`${(f.options ?? []).filter(Boolean).length} 個選項`);
   return out;
@@ -566,6 +577,24 @@ function FieldSettings({
             />
           </div>
         )}
+        {t === 'attachment' && (
+          <>
+            <div className="col-span-2">
+              <AcceptSetting accept={field.rules.accept} onChange={(accept) => rules({ accept })} />
+            </div>
+            <NumberSetting
+              label={`每個檔案的大小上限（MB，最多 ${ATTACHMENT_MAX_SIZE_MB}）`}
+              value={field.rules.maxSizeMb}
+              onChange={(v) => rules({ maxSizeMb: v })}
+            />
+            <NumberSetting
+              integer
+              label={`最多幾個檔案（最多 ${ATTACHMENT_MAX_FILES}）`}
+              value={field.rules.maxFiles}
+              onChange={(v) => rules({ maxFiles: v })}
+            />
+          </>
+        )}
         {t === 'multiselect' && (
           <NumberSetting
             integer
@@ -583,6 +612,37 @@ function FieldSettings({
         </ul>
       )}
     </div>
+  );
+}
+
+/** 允許的檔案類型：輸入「pdf, jpg」，離開時整理成 .pdf、.jpg；空白代表不限制。 */
+function AcceptSetting({
+  accept,
+  onChange,
+}: {
+  accept: string[] | undefined;
+  onChange: (accept: string[] | undefined) => void;
+}) {
+  const [text, setText] = useState((accept ?? []).join(', '));
+  const apply = (value: string) => {
+    const list = normalizeAccept(value);
+    onChange(list.length ? list : undefined);
+    return list;
+  };
+  return (
+    <Setting label="允許的檔案類型（副檔名，逗號分隔；空白代表不限）">
+      <Input
+        className="h-[2.3em] font-mono"
+        placeholder="例如 .pdf, .jpg, .png"
+        spellCheck={false}
+        value={text}
+        onChange={(e) => {
+          setText(e.target.value);
+          apply(e.target.value);
+        }}
+        onBlur={() => setText(apply(text).join(', '))}
+      />
+    </Setting>
   );
 }
 
@@ -653,68 +713,70 @@ function LivePreview({ form }: { form: FormSchema }) {
         ))}
       </div>
       <div className="min-h-0 flex-1 overflow-auto p-4">
-        {tab === 'fill' && (
-          <div className="rounded-xl border bg-card p-4">
-            <FormRunner
-              key={JSON.stringify(form)}
-              form={form}
-              submitLabel="試送出"
-              onSubmit={({ data }) => {
-                setTried(data);
-                setTab('data');
-              }}
-              onInvalid={setTried}
-            />
-          </div>
-        )}
-        {tab === 'readonly' &&
-          (tried && result?.success ? (
+        <AttachmentTransportProvider value={previewTransport}>
+          {tab === 'fill' && (
             <div className="rounded-xl border bg-card p-4">
-              <FormDataView form={form} data={result.data} />
+              <FormRunner
+                key={JSON.stringify(form)}
+                form={form}
+                submitLabel="試送出"
+                onSubmit={({ data }) => {
+                  setTried(data);
+                  setTab('data');
+                }}
+                onInvalid={setTried}
+              />
             </div>
-          ) : (
-            <p className="text-muted-foreground">
-              在「填寫」試送出之後，這裡會顯示審批人看到的樣子。
-            </p>
-          ))}
-        {tab === 'data' &&
-          (result ? (
+          )}
+          {tab === 'readonly' &&
+            (tried && result?.success ? (
+              <div className="rounded-xl border bg-card p-4">
+                <FormDataView form={form} data={result.data} />
+              </div>
+            ) : (
+              <p className="text-muted-foreground">
+                在「填寫」試送出之後，這裡會顯示審批人看到的樣子。
+              </p>
+            ))}
+          {tab === 'data' &&
+            (result ? (
+              <div className="grid gap-2">
+                <p className="text-[0.85em] text-muted-foreground">
+                  {result.success
+                    ? '通過驗證。這一步的資料會這樣存進 Postgres 的 request_data（不會進入 Temporal）：'
+                    : 'API 會拒絕上次試送出的資料（422），各欄位的錯誤：'}
+                </p>
+                <pre className="overflow-auto rounded-lg border bg-card p-3 font-mono text-[0.82em]">
+                  {JSON.stringify(result.success ? result.data : result.errors, null, 2)}
+                </pre>
+              </div>
+            ) : (
+              <p className="text-muted-foreground">在「填寫」試送出之後，這裡會顯示存下的資料。</p>
+            ))}
+          {tab === 'rules' && (
             <div className="grid gap-2">
               <p className="text-[0.85em] text-muted-foreground">
-                {result.success
-                  ? '通過驗證。這一步的資料會這樣存進 Postgres 的 request_data（不會進入 Temporal）：'
-                  : 'API 會拒絕上次試送出的資料（422），各欄位的錯誤：'}
+                由這份 Form 產生的驗證；發起頁、填表頁與 API 都用同一份。
               </p>
-              <pre className="overflow-auto rounded-lg border bg-card p-3 font-mono text-[0.82em]">
-                {JSON.stringify(result.success ? result.data : result.errors, null, 2)}
-              </pre>
+              <table className="w-full overflow-hidden rounded-lg border bg-card text-[0.9em]">
+                <tbody>
+                  {form.fields.map((f) => (
+                    <tr key={f.id} className="border-b last:border-0">
+                      <td className="px-3 py-1.5 font-mono text-[0.9em]">{f.key}</td>
+                      <td className="px-3 py-1.5 text-muted-foreground">
+                        {[
+                          FIELD_TYPE_LABELS[f.type],
+                          f.required ? (f.type === 'checkbox' ? '必須勾選' : '必填') : '選填',
+                          ...describeRules(f),
+                        ].join(' · ')}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
-          ) : (
-            <p className="text-muted-foreground">在「填寫」試送出之後，這裡會顯示存下的資料。</p>
-          ))}
-        {tab === 'rules' && (
-          <div className="grid gap-2">
-            <p className="text-[0.85em] text-muted-foreground">
-              由這份 Form 產生的驗證；發起頁、填表頁與 API 都用同一份。
-            </p>
-            <table className="w-full overflow-hidden rounded-lg border bg-card text-[0.9em]">
-              <tbody>
-                {form.fields.map((f) => (
-                  <tr key={f.id} className="border-b last:border-0">
-                    <td className="px-3 py-1.5 font-mono text-[0.9em]">{f.key}</td>
-                    <td className="px-3 py-1.5 text-muted-foreground">
-                      {[
-                        FIELD_TYPE_LABELS[f.type],
-                        f.required ? (f.type === 'checkbox' ? '必須勾選' : '必填') : '選填',
-                        ...describeRules(f),
-                      ].join(' · ')}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
+          )}
+        </AttachmentTransportProvider>
       </div>
     </section>
   );

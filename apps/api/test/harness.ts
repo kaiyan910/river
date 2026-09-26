@@ -8,6 +8,7 @@ import { TestWorkflowEnvironment } from '@temporalio/testing';
 import { DefaultLogger, makeTelemetryFilterString, Runtime } from '@temporalio/worker';
 import pg from 'pg';
 import { inject } from 'vitest';
+import { S3AttachmentStorage } from '../src/attachment/attachment-storage.js';
 import { createAuth } from '../src/auth/create-auth.js';
 import { createApp } from '../src/create-app.js';
 import {
@@ -81,7 +82,7 @@ export interface TestApp {
 }
 
 /**
- * Seam ①：真實的 Postgres（Testcontainers，每個測試檔一個獨立 database）、
+ * Seam ①：真實的 Postgres（Testcontainers，每個測試檔一個獨立 database）、真實的 Garage（附件）、
  * Temporal TestWorkflowEnvironment（time skipping）與真實的 worker，外加完整的 Nest app。
  */
 export async function startTestApp(): Promise<TestApp> {
@@ -112,6 +113,7 @@ export async function startTestApp(): Promise<TestApp> {
     auth,
     emailSender: emails,
     appUrl: ORIGIN,
+    storage: new S3AttachmentStorage(inject('s3')),
     temporal: temporal.client,
     taskQueue: TASK_QUEUE,
     log: { LOG_LEVEL: 'silent', LOG_FORMAT: 'json' },

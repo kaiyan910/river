@@ -24,6 +24,7 @@ import {
 import { type Database, processVersions, requestEvents, requests } from '@river/db';
 import { Client, WorkflowNotFoundError } from '@temporalio/client';
 import { and, eq, inArray, sql } from 'drizzle-orm';
+import { AttachmentsService } from '../attachment/attachments.service.js';
 import type { ActiveParticipant } from '../auth/active-participant.js';
 import { canStart, currentVersions, startFormOf } from '../process/processes.service.js';
 import { DATABASE, TEMPORAL_CLIENT, TEMPORAL_TASK_QUEUE } from '../tokens.js';
@@ -38,6 +39,7 @@ export class RequestsService {
     @Inject(TEMPORAL_CLIENT) private readonly temporal: Client,
     @Inject(TEMPORAL_TASK_QUEUE) private readonly taskQueue: string,
     private readonly reads: RequestReads,
+    private readonly attachments: AttachmentsService,
   ) {}
 
   /**
@@ -53,7 +55,11 @@ export class RequestsService {
     if (!current) throw new NotFoundException('找不到可以發起的 Process');
     if (!(await canStart(this.db, input.processId, me.id)))
       throw new ForbiddenException('你不在這個 Process 的 Initiator Role 裡，不能發起');
-    const submission = validateStepData(startFormOf(current.dsl), input.data);
+    const startForm = startFormOf(current.dsl);
+    const submission = validateStepData(
+      startForm,
+      await this.attachments.resolve(startForm, input.data, { submitterId: me.id }),
+    );
     const startNode = current.dsl.nodes.find((n) => n.type === 'start');
 
     const requestId = await this.db.transaction(async (tx) => {
@@ -104,7 +110,11 @@ export class RequestsService {
       .where(eq(requests.id, id));
     if (!request || request.initiatorId !== me.id)
       throw new NotFoundException('找不到這筆 Request');
-    const submission = validateStepData(startFormOf(request.dsl), input.data);
+    const startForm = startFormOf(request.dsl);
+    const submission = validateStepData(
+      startForm,
+      await this.attachments.resolve(startForm, input.data, { submitterId: me.id, requestId: id }),
+    );
     const startNode = request.dsl.nodes.find((n) => n.type === 'start');
 
     const round = await this.db.transaction(async (tx) => {

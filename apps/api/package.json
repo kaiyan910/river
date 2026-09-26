@@ -9,9 +9,12 @@
     "start": "node --env-file-if-exists=../../.env dist/main.js",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "seed:admin": "node --env-file-if-exists=../../.env --conditions=source --import @swc-node/register/esm-register src/scripts/seed-admin.ts"
+    "seed:admin": "node --env-file-if-exists=../../.env --conditions=source --import @swc-node/register/esm-register src/scripts/seed-admin.ts",
+    "setup:storage": "node --env-file-if-exists=../../.env --conditions=source --import @swc-node/register/esm-register src/scripts/setup-storage.ts"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1141.0",
+    "@aws-sdk/s3-request-presigner": "^3.1141.0",
     "@nestjs/common": "^12.1.0",
     "@nestjs/core": "^12.1.0",
     "@nestjs/platform-express": "^12.1.0",
@@ -21,8 +24,8 @@
     "@river/db": "workspace:*",
     "@river/dsl": "workspace:*",
     "@river/email": "workspace:*",
-    "@river/logger": "workspace:*",
     "@river/forms": "workspace:*",
+    "@river/logger": "workspace:*",
     "@temporalio/client": "^1.24.0",
     "@thallesp/nestjs-better-auth": "^2.8.0",
     "better-auth": "^1.7.5",
@@ -49,6 +52,7 @@
     "@types/node": "^24",
     "@types/pg": "^8.23.1",
     "pg": "^8.23.0",
+    "testcontainers": "^12.1.0",
     "typescript": "~6.0.3",
     "unplugin-swc": "^2.0.0",
     "vitest": "^5.0.1"

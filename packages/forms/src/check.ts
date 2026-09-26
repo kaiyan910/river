@@ -1,3 +1,4 @@
+import { ATTACHMENT_EXTENSION_PATTERN } from './attachment.js';
 import type { FormSchema } from './schema.js';
 
 export const FORM_ERROR_CODES = [
@@ -10,6 +11,7 @@ export const FORM_ERROR_CODES = [
   'FIELD_DUPLICATE_OPTION',
   'FIELD_BAD_RANGE',
   'FIELD_BAD_PATTERN',
+  'FIELD_BAD_ACCEPT',
 ] as const;
 export type FormErrorCode = (typeof FORM_ERROR_CODES)[number];
 
@@ -67,6 +69,9 @@ export function checkForm(form: FormSchema): FormError[] {
         'FIELD_BAD_PATTERN',
         `「${label}」的格式不是有效的正規表示式，或是被重複的群組裡有重複或分支（例如 (a+)+、(a|b)+）。`,
       );
+
+    if (f.type === 'attachment' && r.accept?.some((a) => !ATTACHMENT_EXTENSION_PATTERN.test(a)))
+      push(f.id, 'FIELD_BAD_ACCEPT', `「${label}」允許的檔案類型要是副檔名，例如 .pdf。`);
   }
   return errors;
 }

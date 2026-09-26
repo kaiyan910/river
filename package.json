@@ -19,7 +19,8 @@
     "format": "biome check --write .",
     "db:generate": "bun run --cwd packages/db generate",
     "db:migrate": "bun run --cwd packages/db migrate",
-    "seed:admin": "bun run --cwd apps/api seed:admin"
+    "seed:admin": "bun run --cwd apps/api seed:admin",
+    "setup:storage": "bun run --cwd apps/api setup:storage"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.14",

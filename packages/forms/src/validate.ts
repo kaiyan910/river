@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { attachmentFieldSchema } from './attachment.js';
 import { isSafePattern } from './check.js';
 import type { FormField, FormSchema } from './schema.js';
 
@@ -102,6 +103,8 @@ function fieldSchema(f: FormField, options: FormValidationOptions): z.ZodType {
         if (f.required && !checked) return fail(ctx, '必須勾選');
         return checked;
       });
+    case 'attachment':
+      return attachmentFieldSchema(f);
   }
 }
 

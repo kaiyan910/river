@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { attachmentRulesShape } from './attachment.js';
 
 /**
  * Form schema：Designer 在表單設計器定義的欄位清單，屬於 Process，跟著 Process Version 一起存成快照。
@@ -14,6 +15,7 @@ export const FIELD_TYPES = [
   'radio',
   'multiselect',
   'checkbox',
+  'attachment',
 ] as const;
 export type FieldType = (typeof FIELD_TYPES)[number];
 
@@ -26,6 +28,7 @@ export const FIELD_TYPE_LABELS: Record<FieldType, string> = {
   radio: '單選',
   multiselect: '多選',
   checkbox: 'Checkbox',
+  attachment: '附件',
 };
 
 /** 正規表示式的長度上限；太長的格式難以確認不會造成 ReDoS。 */
@@ -46,6 +49,8 @@ export const fieldRulesSchema = z.object({
   notPast: z.boolean().optional(),
   /** 多選最多選幾項 */
   maxSelected: z.number().int().positive().optional(),
+  /** 附件：允許的檔案類型、大小上限與數量（見 attachment.ts） */
+  ...attachmentRulesShape,
 });
 export type FieldRules = z.infer<typeof fieldRulesSchema>;
 

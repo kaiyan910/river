@@ -26,3 +26,14 @@ garage() { docker compose -f deploy/compose.yaml exec garage /garage "$@"; }
 garage layout assign -z dev -c 1G "$(garage node id -q | cut -d@ -f1)"
 garage layout apply --version 1
 ```
+
+接著建立附件用的 access key 與 bucket（key ID 與 secret 用 `.env` 的 `S3_ACCESS_KEY_ID`、`S3_SECRET_ACCESS_KEY`；
+key ID 是 `GK` 加 24 個 hex 字元，secret 用 `openssl rand -hex 32` 產生），再設定 bucket 的 CORS，
+讓瀏覽器可以用 presigned URL 直接上傳、下載：
+
+```sh
+garage key import --yes -n river "$S3_ACCESS_KEY_ID" "$S3_SECRET_ACCESS_KEY"
+garage bucket create river-attachments
+garage bucket allow --read --write --owner river-attachments --key river
+bun run setup:storage                         # 依 .env 的 BETTER_AUTH_URL 等設定 CORS
+```

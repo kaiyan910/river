@@ -1,17 +1,22 @@
-import type { FormField, FormSchema } from '@river/forms';
+import type { AttachmentRef, FormField, FormSchema } from '@river/forms';
 import { formToZod, todayIn } from '@river/forms';
 import { useForm } from '@tanstack/react-form';
 import type { ReactNode } from 'react';
 import { z } from 'zod';
+import { AttachmentInput, AttachmentList, attachmentsFrom } from '@/components/attachment-field';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { cn } from '@/lib/utils';
 
-/** 畫面上的欄位值：數字欄位是輸入框裡的字串，送出前由 formToZod 正規化。 */
-export type FieldValue = string | string[] | boolean;
+/** 畫面上的欄位值：數字欄位是輸入框裡的字串，送出前由 formToZod 正規化；附件欄位是已上傳的附件。 */
+export type FieldValue = string | string[] | boolean | AttachmentRef[];
 
 export function emptyValue(f: FormField): FieldValue {
-  return f.type === 'multiselect' ? [] : f.type === 'checkbox' ? false : '';
+  return f.type === 'multiselect' || f.type === 'attachment'
+    ? []
+    : f.type === 'checkbox'
+      ? false
+      : '';
 }
 
 export function emptyValues(form: FormSchema): Record<string, FieldValue> {
@@ -29,6 +34,7 @@ export function valuesFrom(
       if (f.type === 'multiselect')
         return [f.key, Array.isArray(v) ? v.filter((x) => typeof x === 'string') : []];
       if (f.type === 'checkbox') return [f.key, v === true];
+      if (f.type === 'attachment') return [f.key, attachmentsFrom(v)];
       return [f.key, typeof v === 'string' || typeof v === 'number' ? String(v) : ''];
     }),
   );
@@ -94,7 +100,11 @@ export function FieldInput({
     case 'radio':
     case 'multiselect': {
       const multi = field.type === 'multiselect';
-      const selected = multi ? (Array.isArray(value) ? value : []) : [text];
+      const selected = multi
+        ? Array.isArray(value)
+          ? value.filter((x): x is string => typeof x === 'string')
+          : []
+        : [text];
       return (
         <div
           id={id}
@@ -145,6 +155,18 @@ export function FieldInput({
           {field.label}
           {field.required && <span className="text-destructive">*</span>}
         </label>
+      );
+    case 'attachment':
+      return (
+        <AttachmentInput
+          id={id}
+          field={field}
+          value={attachmentsFrom(value)}
+          onChange={onChange}
+          onBlur={onBlur}
+          invalid={invalid}
+          disabled={disabled}
+        />
       );
   }
 }
@@ -333,7 +355,11 @@ export function FormDataView({ form, data }: { form: FormSchema; data: Record<st
               (f.type === 'number' || f.type === 'money') && 'font-mono',
             )}
           >
-            {displayValue(f, data[f.key])}
+            {f.type === 'attachment' && attachmentsFrom(data[f.key]).length > 0 ? (
+              <AttachmentList files={attachmentsFrom(data[f.key])} />
+            ) : (
+              displayValue(f, data[f.key])
+            )}
           </dd>
         </div>
       ))}
@@ -346,6 +372,12 @@ const money = new Intl.NumberFormat('zh-TW', { maximumFractionDigits: 2 });
 export function displayValue(f: FormField, v: unknown): string {
   if (f.type === 'checkbox') return v === true ? '是' : '否';
   if (v === undefined || v === null || v === '' || (Array.isArray(v) && v.length === 0)) return '—';
+  if (f.type === 'attachment')
+    return (
+      attachmentsFrom(v)
+        .map((a) => a.name)
+        .join('、') || '—'
+    );
   if (Array.isArray(v)) return v.join('、');
   if (f.type === 'money' && typeof v === 'number') return `NT$ ${money.format(v)}`;
   return String(v);
