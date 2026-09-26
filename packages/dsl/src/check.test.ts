@@ -645,4 +645,76 @@ describe('DSL 檢查', () => {
       expect(codes(dsl)).toEqual([['PARALLEL_SPLIT_UNMATCHED', 'inner']]);
     });
   });
+
+  describe('Email 節點', () => {
+    const email = (
+      overrides: Partial<Extract<ProcessNode, { type: 'email' }>> = {},
+    ): ProcessNode => ({
+      id: 'notify',
+      type: 'email',
+      name: '通知財務',
+      recipient: { type: 'initiator' },
+      subject: '「{{requestTitle}}」已核准',
+      message: '{{processName}} 的申請已經核准，請到 {{link}} 查看。',
+      position: at,
+      ...overrides,
+    });
+    const withEmail = (node: ProcessNode): ProcessDsl => ({
+      nodes: [start(), node, end()],
+      edges: [edge('start', 'notify'), edge('notify', 'end')],
+      forms: [],
+    });
+
+    it('收件對象與主旨都設定、只用了可用的變數時沒有錯誤', () => {
+      expect(checkProcess(withEmail(email()))).toEqual([]);
+    });
+
+    it('DSL schema 接受四種收件對象', () => {
+      for (const recipient of [
+        { type: 'participant', participantId: 'p-1' },
+        { type: 'role', roleId: 'r-1' },
+        { type: 'initiator' },
+        { type: 'manager' },
+      ] as const) {
+        const dsl = withEmail(email({ recipient }));
+        expect(processDslSchema.parse(dsl)).toEqual(dsl);
+      }
+    });
+
+    it('沒有收件對象', () => {
+      expect(checkProcess(withEmail(email({ recipient: null })))).toEqual([
+        {
+          nodeId: 'notify',
+          code: 'EMAIL_NO_RECIPIENT',
+          message: expect.stringContaining('通知財務'),
+        },
+      ]);
+    });
+
+    it('沒有主旨', () => {
+      expect(checkProcess(withEmail(email({ subject: '  ' })))).toEqual([
+        {
+          nodeId: 'notify',
+          code: 'EMAIL_NO_SUBJECT',
+          message: expect.stringContaining('通知財務'),
+        },
+      ]);
+    });
+
+    it('範本用了不能用的變數（例如 Form 欄位）時，主旨與內文各回報一次並列出變數名稱', () => {
+      const node = email({ subject: '{{ amount }} 元', message: '目的地：{{destination}}' });
+      expect(checkProcess(withEmail(node))).toEqual([
+        {
+          nodeId: 'notify',
+          code: 'EMAIL_UNKNOWN_VARIABLE',
+          message: expect.stringContaining('amount'),
+        },
+        {
+          nodeId: 'notify',
+          code: 'EMAIL_UNKNOWN_VARIABLE',
+          message: expect.stringContaining('destination'),
+        },
+      ]);
+    });
+  });
 });

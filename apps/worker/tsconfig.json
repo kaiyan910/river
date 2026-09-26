@@ -2,7 +2,9 @@
   "extends": "@river/config/tsconfig.base.json",
   "compilerOptions": {
     "outDir": "dist",
-    "rootDir": "src"
+    "rootDir": "src",
+    // @river/email 的信件範本是 .tsx，從原始碼型別檢查時需要。
+    "jsx": "react-jsx"
   },
   "include": ["src"]
 }

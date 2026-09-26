@@ -4,6 +4,7 @@ import {
   type CanvasEdgeData,
   type CanvasNodeData,
   checkProcess,
+  type EmailRecipient,
   fromCanvas,
   isSystemNode,
   NODE_TYPE_LABELS,
@@ -35,6 +36,7 @@ import {
   FileText,
   GitFork,
   GitMerge,
+  Mail,
   Split,
   UserCheck,
   UserRoundCheck,
@@ -57,6 +59,7 @@ export const NODE_ICONS = {
   condition: Split,
   parallelSplit: GitFork,
   parallelJoin: GitMerge,
+  email: Mail,
   end: CircleStop,
 } as const;
 
@@ -82,6 +85,15 @@ function newNode(type: NodeType, position: { x: number; y: number }): ProcessNod
       return { ...base, type, formId: null };
     case 'condition':
       return { ...base, type, name: '新的條件' };
+    case 'email':
+      return {
+        ...base,
+        type,
+        name: '寄送 Email',
+        recipient: null,
+        subject: '「{{requestTitle}}」有新的進度',
+        message: '{{processName}} 的申請「{{requestTitle}}」有新的進度，請到平台查看。',
+      };
     case 'parallelSplit':
     case 'parallelJoin':
     case 'end':
@@ -283,6 +295,7 @@ function NodeCard({ data, selected, type }: NodeProps<RFNode>) {
       {type === 'parallelJoin' && (
         <div className="mt-1 text-[0.85em] text-muted-foreground">等所有分支完成才繼續</div>
       )}
+      {data.node.type === 'email' && <RecipientLine recipient={data.node.recipient} />}
       {(data.node.type === 'start' || data.node.type === 'form') && (
         <FormLine formId={data.node.formId} required={data.node.type === 'form'} />
       )}
@@ -325,6 +338,27 @@ function AssigneeLine({ assignee, missing }: { assignee: Assignee | null; missin
       return <PersonLine participantId={assignee.participantId} />;
     case 'manager':
       return <ManagerLine fallbackRoleId={assignee.fallbackRoleId} />;
+  }
+}
+
+/** Email 節點的收件對象。 */
+function RecipientLine({ recipient }: { recipient: EmailRecipient | null }) {
+  if (!recipient) return <div className="mt-1 text-[0.85em] text-destructive">未設定收件對象</div>;
+  switch (recipient.type) {
+    case 'role':
+      return <RoleLine roleId={recipient.roleId} />;
+    case 'participant':
+      return <PersonLine participantId={recipient.participantId} />;
+    case 'initiator':
+    case 'manager':
+      return (
+        <div className="mt-1 flex items-center gap-1.5 text-[0.85em] text-muted-foreground">
+          <UserRoundCheck size={14} aria-hidden className="shrink-0" />
+          <span className="truncate">
+            {recipient.type === 'initiator' ? '寄給發起人' : '寄給發起人的 Manager'}
+          </span>
+        </div>
+      );
   }
 }
 
@@ -384,5 +418,6 @@ export const nodeTypes = {
   condition: NodeCard,
   parallelSplit: NodeCard,
   parallelJoin: NodeCard,
+  email: NodeCard,
   end: NodeCard,
 };

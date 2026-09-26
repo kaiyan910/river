@@ -1,3 +1,6 @@
+// worker 以 tsx 從原始碼執行時不套用這個 package 的 tsconfig，所以在檔案裡指定 JSX runtime。
+/** @jsxRuntime automatic */
+/** @jsxImportSource react */
 import {
   Body,
   Button,

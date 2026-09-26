@@ -10,11 +10,21 @@ import {
   type TaskKind,
   tasks,
 } from '@river/db';
-import type { ProcessDsl } from '@river/dsl';
+import { fillEmailTemplate, type ProcessDsl } from '@river/dsl';
 import { chooseBranch, shouldAutoApprove } from '@river/dsl/branch';
 import { ApplicationFailure, log } from '@temporalio/activity';
 import { and, asc, desc, eq, gt, inArray, or, sql } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
+import {
+  activeEmails,
+  emailRecipients,
+  type NotificationDeps,
+  requestSummary,
+  requestUrl,
+  roleMemberEmails,
+  sendToEach,
+  taskUrl,
+} from './notifications.js';
 
 export interface CreateTaskInput {
   requestId: string;
@@ -50,6 +60,23 @@ export interface EvaluateAutoApprovalInput {
   visit?: number;
 }
 
+/**
+ * Request 的通知：新 Task 寄給處理人（指派給 Role 時寄給每一位成員），Return 與完成寄給發起人。
+ * 只帶 ID；信件內容由 activity 從 Postgres 讀取，只包含 Request 標題、Process 名稱與連結。
+ */
+export type NotifyInput =
+  | { requestId: string; event: 'taskCreated'; taskId: string }
+  | { requestId: string; event: 'returned' | 'completed' };
+
+export interface SendEmailInput {
+  requestId: string;
+  processVersionId: string;
+  /** Email 節點的 ID。 */
+  nodeId: string;
+  /** 同 EvaluateConditionInput.visit。 */
+  visit: number;
+}
+
 const managers = alias(participants, 'managers');
 
 /** interpreter 需要的流程圖；不含 Form schema，Temporal history 裡只有節點與連線。 */
@@ -59,7 +86,7 @@ export type ProcessGraph = Omit<ProcessDsl, 'forms'>;
  * 每個 activity 都要能安全重試：寫入 Task 與 request_events 在同一個 transaction，
  * 而且只有真的改變狀態時才寫事件。
  */
-export function createActivities(db: Database) {
+export function createActivities(db: Database, notification: NotificationDeps) {
   return {
     async checkDatabase(): Promise<void> {
       await db.execute(sql`select 1`);
@@ -206,6 +233,101 @@ export function createActivities(db: Database) {
       });
     },
 
+    /**
+     * 寄出 Request 的通知。寄信失敗時由 Temporal 重試，所以可能重複寄出，但不會漏寄。
+     * 寄出前確認事情仍然成立：Task 還沒處理（已經作廢或完成就不必再通知）、Request 仍是 returned 或真的完成了。
+     * 停用的 Participant 收不到信。
+     */
+    async notify(input: NotifyInput): Promise<void> {
+      const request = await requestSummary(db, input.requestId);
+      if (!request) throw ApplicationFailure.nonRetryable(`找不到 Request ${input.requestId}`);
+      const props = { requestTitle: request.title, processName: request.processName };
+
+      if (input.event === 'taskCreated') {
+        const [task] = await db
+          .select({ status: tasks.status, assigneeId: tasks.assigneeId, roleId: tasks.roleId })
+          .from(tasks)
+          .where(eq(tasks.id, input.taskId));
+        if (task?.status !== 'open') return;
+        const to = task.roleId
+          ? await roleMemberEmails(db, task.roleId)
+          : await activeEmails(db, task.assigneeId ? [task.assigneeId] : []);
+        await sendToEach(
+          notification,
+          to,
+          { ...props, url: taskUrl(notification.appUrl, input.taskId) },
+          { kind: 'taskCreated' },
+        );
+        return;
+      }
+
+      // 重試時事情可能已經過去（例如發起人已經重新送出或 Withdraw），就不寄過時的信。
+      const expected = input.event === 'completed' ? 'completed' : 'returned';
+      if (request.status !== expected) return;
+      await sendToEach(
+        notification,
+        await activeEmails(db, [request.initiatorId]),
+        { ...props, url: requestUrl(notification.appUrl, input.requestId) },
+        { kind: input.event },
+      );
+    },
+
+    /**
+     * Email 節點：依節點的收件對象與訊息範本寄信，範本只代入 Request 標題、Process 名稱與連結。
+     * 寄出後，Request 仍是 running 才寫入 step.email_sent 事件；沒有任何收件人（例如發起人沒有 Manager）時不寫。
+     * 重試時，這一輪第 visit 次走到這一步已經寫入事件就不再寄；寄出後、寫入前失敗的話會重複寄出，但不會漏寄。
+     * Request 已經不是 running（例如剛被 Withdraw）時不寄。
+     */
+    async sendEmail(input: SendEmailInput): Promise<void> {
+      if ((await earlierVisit(db, input))?.type === 'step.email_sent') return;
+      const request = await requestSummary(db, input.requestId);
+      if (!request) throw ApplicationFailure.nonRetryable(`找不到 Request ${input.requestId}`);
+      if (request.status !== 'running') return;
+      const [version] = await db
+        .select({ dsl: processVersions.dsl })
+        .from(processVersions)
+        .where(eq(processVersions.id, input.processVersionId));
+      const node = version?.dsl.nodes.find((n) => n.id === input.nodeId);
+      // 發佈前檢查（EMAIL_NO_RECIPIENT）已經擋下；萬一出現，寧可讓 workflow 失敗也不要當作寄出了。
+      if (node?.type !== 'email' || !node.recipient)
+        throw ApplicationFailure.nonRetryable(`Email 節點 ${input.nodeId} 沒有設定收件對象`);
+
+      const to = await emailRecipients(db, node.recipient, request.initiatorId);
+      if (to.length === 0) {
+        log.info('Email 節點沒有收件人，不寄出', {
+          requestId: input.requestId,
+          nodeId: input.nodeId,
+        });
+        return;
+      }
+      const props = {
+        requestTitle: request.title,
+        processName: request.processName,
+        url: requestUrl(notification.appUrl, input.requestId),
+      };
+      const values = { ...props, link: props.url };
+      await sendToEach(notification, to, props, {
+        kind: 'custom',
+        subject: fillEmailTemplate(node.subject, values),
+        message: fillEmailTemplate(node.message, values),
+      });
+
+      await db.transaction(async (tx) => {
+        const [locked] = await tx
+          .select({ status: requests.status })
+          .from(requests)
+          .where(eq(requests.id, input.requestId))
+          .for('update');
+        if (locked?.status !== 'running') return;
+        if ((await earlierVisit(tx, input))?.type === 'step.email_sent') return;
+        await tx.insert(requestEvents).values({
+          requestId: input.requestId,
+          type: 'step.email_sent',
+          nodeId: input.nodeId,
+        });
+      });
+    },
+
     async completeRequest(requestId: string): Promise<void> {
       await db.transaction(async (tx) => {
         const [completed] = await tx
@@ -236,9 +358,11 @@ function jsonataErrorCode(error: unknown): unknown {
 }
 
 /**
- * 這一輪第 input.visit 次走到這個節點時留下的紀錄：條件的判斷、自動核准，或為它建立的 Task；還沒有時為 undefined。
+ * 這一輪第 input.visit 次走到這個節點時留下的紀錄：條件的判斷、自動核准、寄出的 Email，或為它建立的 Task；
+ * 還沒有時為 undefined。
  * 並行分支上其他分支隨時會寫入事件，所以不能只看 Request 的最後一筆事件，而是只數這個節點自己的紀錄。
  * 條件節點每次判斷都會寫入事件；審批節點每次不是自動核准，就是建立了 Task，所以第幾次一定對得上。
+ * Email 節點沒有收件人時不寫事件，同一輪再次走到時第幾次會對不上，最壞的情況是重試時重複寄出。
  * 舊的 workflow 沒有 visit（沒有並行分支）：沿用原本的做法，最後一筆事件是這個節點的紀錄才算。
  */
 async function earlierVisit(
@@ -276,7 +400,11 @@ async function earlierVisit(
         gt(requestEvents.id, resubmitted?.id ?? 0),
         or(
           and(
-            inArray(requestEvents.type, ['step.branch_chosen', 'step.auto_approved']),
+            inArray(requestEvents.type, [
+              'step.branch_chosen',
+              'step.auto_approved',
+              'step.email_sent',
+            ]),
             eq(requestEvents.nodeId, input.nodeId),
           ),
           and(eq(requestEvents.type, 'task.created'), eq(tasks.nodeId, input.nodeId)),

@@ -68,7 +68,7 @@ export class ApiClient {
 export interface TestApp {
   db: Database;
   anonymous: ApiClient;
-  /** 取代 SMTP / Resend 的 fake，記錄 api 寄出的每一封信。 */
+  /** 取代 SMTP / Resend 的 fake，記錄 api 與 worker 寄出的每一封信。 */
   emails: RecordingEmailSender;
   /** 直接對 Temporal 送 Signal，模擬 API 重試或重複送出。 */
   temporal: Client;
@@ -89,12 +89,15 @@ export async function startTestApp(): Promise<TestApp> {
   const database = connectDatabase(databaseUrl);
   await migrateDatabase(database.db);
 
+  const emails = new RecordingEmailSender();
   const temporal = await TestWorkflowEnvironment.createTimeSkipping();
   const worker = await createWorker({
     connection: temporal.nativeConnection,
     namespace: temporal.namespace ?? 'default',
     taskQueue: TASK_QUEUE,
     db: database.db,
+    emailSender: emails,
+    appUrl: ORIGIN,
   });
   const workerRun = worker.run();
 
@@ -102,7 +105,6 @@ export async function startTestApp(): Promise<TestApp> {
     secret: 'test-secret-that-is-at-least-32-characters',
     baseURL: ORIGIN,
   });
-  const emails = new RecordingEmailSender();
   const app: INestApplication = await createApp({
     db: database.db,
     auth,

@@ -5,6 +5,8 @@ import {
   type AutoApprove,
   type Branch,
   type DslError,
+  EMAIL_TEMPLATE_VARIABLES,
+  type EmailRecipient,
   formIdOf,
   NODE_TYPE_LABELS,
   type NodeSettings,
@@ -650,6 +652,7 @@ const PALETTE: { type: NodeType; hint: string }[] = [
   { type: 'condition', hint: '依 Form 資料（JSONata 表達式）走不同的出邊' },
   { type: 'parallelSplit', hint: '每條出邊同時進行，例如 IT 和財務同時審批' },
   { type: 'parallelJoin', hint: '等並行分支的每一條都完成，Request 才繼續' },
+  { type: 'email', hint: '寄一封信給特定人、Role、發起人或發起人的 Manager' },
   { type: 'end', hint: '流程結束' },
 ];
 
@@ -745,6 +748,15 @@ function Inspector({
             (e) => e.code === 'AUTO_APPROVAL_NO_EXPRESSION' || e.code === 'INVALID_JSONATA',
           )}
           onChange={(autoApprove) => onChange({ autoApprove })}
+        />
+      )}
+      {settings.type === 'email' && (
+        <EmailFields
+          recipient={settings.recipient}
+          subject={settings.subject}
+          message={settings.message}
+          errors={node.data.errors}
+          onChange={onChange}
         />
       )}
       {(settings.type === 'start' || settings.type === 'form') && (
@@ -1085,18 +1097,148 @@ function AssigneeField({
   );
 }
 
+const RECIPIENT_MODES = [
+  { key: 'participant', label: '特定人員' },
+  { key: 'role', label: 'Role' },
+  { key: 'initiator', label: '發起人' },
+  { key: 'manager', label: 'Manager' },
+] as const;
+
+/**
+ * Email 節點：收件對象與訊息範本。範本只能用 EMAIL_TEMPLATE_VARIABLES 裡的變數，
+ * 引用 Form 欄位等其他變數時由檢查器擋下；點變數會加到內文最後面。
+ */
+function EmailFields({
+  recipient,
+  subject,
+  message,
+  errors,
+  onChange,
+}: {
+  recipient: EmailRecipient | null;
+  subject: string;
+  message: string;
+  errors: DslError[];
+  onChange: (patch: Partial<NodeSettings>) => void;
+}) {
+  // 還沒選好對象時也要記得正在選哪一種。
+  const [mode, setMode] = useState<EmailRecipient['type']>(recipient?.type ?? 'participant');
+  const templateInvalid = errors.some((e) => e.code === 'EMAIL_UNKNOWN_VARIABLE');
+  return (
+    <>
+      <div className="grid gap-1.5">
+        <span className="text-[0.85em] text-muted-foreground">收件對象</span>
+        <fieldset
+          aria-label="收件對象"
+          className="m-0 grid min-w-0 grid-cols-4 rounded-md border-0 bg-muted p-0.5 text-[0.8em]"
+        >
+          {RECIPIENT_MODES.map((m) => (
+            <button
+              key={m.key}
+              type="button"
+              aria-pressed={mode === m.key}
+              onClick={() => {
+                if (m.key === mode) return;
+                setMode(m.key);
+                // 發起人與 Manager 本身就是完整的收件對象；其他還要選人或 Role。
+                onChange({
+                  recipient: m.key === 'initiator' || m.key === 'manager' ? { type: m.key } : null,
+                });
+              }}
+              className={cn(
+                'cursor-pointer whitespace-nowrap rounded px-1 py-0.5 text-muted-foreground',
+                mode === m.key && 'bg-card text-foreground shadow-sm',
+              )}
+            >
+              {m.label}
+            </button>
+          ))}
+        </fieldset>
+        {mode === 'participant' && (
+          <ParticipantAssignee
+            participantId={recipient?.type === 'participant' ? recipient.participantId : null}
+            onChange={(participantId) =>
+              onChange({ recipient: participantId ? { type: 'participant', participantId } : null })
+            }
+          />
+        )}
+        {mode === 'role' && (
+          <RoleAssignee
+            roleId={recipient?.type === 'role' ? recipient.roleId : null}
+            hint="寄給這個 Role 的每一位成員。"
+            emptyHint="這個 Role 目前沒有成員，不會寄給任何人。"
+            onChange={(roleId) => onChange({ recipient: roleId ? { type: 'role', roleId } : null })}
+          />
+        )}
+        {mode === 'initiator' && <p className="text-[0.85em]">寄給發起這筆 Request 的人。</p>}
+        {mode === 'manager' && (
+          <p className="text-[0.85em]">
+            寄給發起人的 Manager。發起人沒有 Manager，或 Manager 已停用時不寄出，流程照常往下走。
+          </p>
+        )}
+      </div>
+      <div className="grid gap-1">
+        <Label htmlFor="email-subject" className="font-normal text-[0.85em] text-muted-foreground">
+          主旨
+        </Label>
+        <Input
+          id="email-subject"
+          value={subject}
+          aria-invalid={!subject.trim() || templateInvalid || undefined}
+          onChange={(e) => onChange({ subject: e.target.value })}
+        />
+      </div>
+      <div className="grid gap-1">
+        <Label htmlFor="email-message" className="font-normal text-[0.85em] text-muted-foreground">
+          內文
+        </Label>
+        <textarea
+          id="email-message"
+          value={message}
+          rows={4}
+          aria-invalid={templateInvalid || undefined}
+          onChange={(e) => onChange({ message: e.target.value })}
+          className="w-full rounded-md border border-input bg-card px-2 py-1 text-[0.9em] aria-invalid:border-destructive"
+        />
+      </div>
+      <div className="grid gap-1">
+        <span className="text-[0.8em] text-muted-foreground">可用的變數（點一下加到內文）</span>
+        <div className="flex flex-wrap gap-1">
+          {Object.entries(EMAIL_TEMPLATE_VARIABLES).map(([key, label]) => (
+            <button
+              key={key}
+              type="button"
+              title={label}
+              onClick={() => onChange({ message: `${message}{{${key}}}` })}
+              className="cursor-pointer rounded bg-muted px-1.5 py-0.5 font-mono text-[0.8em] hover:bg-accent"
+            >
+              {`{{${key}}}`}
+            </button>
+          ))}
+        </div>
+        <p className="text-[0.8em] text-muted-foreground">
+          信件會經過外部的寄信服務，所以不能包含 Form 資料；信末一律附上回到 Request 的連結。
+        </p>
+      </div>
+    </>
+  );
+}
+
 function RoleAssignee({
   roleId,
   onChange,
   label = 'Role',
   placeholder = '選擇 Role…',
   hint = 'Role 的每位成員都會看到這個 Task，不需要認領；最先送出的決定生效。',
+  emptyHint = '這個 Role 目前沒有成員，Task 會沒有人可以處理。',
 }: {
   roleId: string | null;
   onChange: (roleId: string | null) => void;
   label?: string;
   placeholder?: string;
   hint?: string;
+  /** 選到沒有成員的 Role 時的提醒。 */
+  emptyHint?: string;
 }) {
   const roles = useQuery(roleDirectoryQueryOptions);
   const role = roles.data?.find((r) => r.id === roleId);
@@ -1125,7 +1267,7 @@ function RoleAssignee({
         </select>
       </div>
       <p className="text-[0.8em] text-muted-foreground">
-        {role && role.memberCount === 0 ? '這個 Role 目前沒有成員，Task 會沒有人可以處理。' : hint}
+        {role && role.memberCount === 0 ? emptyHint : hint}
       </p>
       {roles.isError && <p className="text-[0.85em] text-destructive">{roles.error.message}</p>}
     </>

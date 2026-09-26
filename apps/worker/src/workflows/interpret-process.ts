@@ -12,16 +12,42 @@ import {
   condition,
   continueAsNew,
   defineSignal,
+  log,
+  patched,
   proxyActivities,
   setHandler,
   uuid4,
 } from '@temporalio/workflow';
-import type { Activities, CreateTaskInput } from '../activities.js';
+import type { Activities, CreateTaskInput, NotifyInput } from '../activities.js';
 
 const { loadProcessVersion, createTask, evaluateCondition, evaluateAutoApproval, completeRequest } =
   proxyActivities<Activities>({
     startToCloseTimeout: '30 seconds',
   });
+
+/**
+ * 寄信：寄信服務故障時重試幾次就放棄，不讓 Request 卡住；通知與 Email 節點都是盡力而為。
+ * 重試由 activity 冪等處理，最壞的情況是重複寄出。
+ */
+const bestEffortMail = proxyActivities<Activities>({
+  startToCloseTimeout: '30 seconds',
+  retry: { maximumAttempts: 5 },
+});
+
+/**
+ * 新 Task、Return 與完成時寄通知，是在既有的流轉中間多呼叫 activity：
+ * 以 patched() 保護，這個版本之前開始的 workflow 重播時照舊不寄。
+ */
+const NOTIFICATIONS_PATCH = 'email-notifications';
+
+async function notify(input: NotifyInput): Promise<void> {
+  if (!patched(NOTIFICATIONS_PATCH)) return;
+  try {
+    await bestEffortMail.notify(input);
+  } catch (error) {
+    log.warn('通知寄送失敗，略過', { requestId: input.requestId, event: input.event, error });
+  }
+}
 
 export const taskCompletedSignal = defineSignal<[TaskCompletedSignal]>(TASK_COMPLETED_SIGNAL);
 export const resubmittedSignal = defineSignal<[ResubmittedSignal]>(RESUBMITTED_SIGNAL);
@@ -35,6 +61,8 @@ export const withdrawSignal = defineSignal(WITHDRAW_SIGNAL);
  * 設定了 Auto-approval 的審批節點先交給 evaluateAutoApproval：成立時不建立 Task，直接往下走；
  * 不成立或無法判斷時照常建立 Task。重新送出後從頭再跑一次，所以每一輪都重新判斷。
  * 並行分支（parallelSplit）的各條分支同時走，每一條都走到配對的 parallelJoin 後才繼續（見 walk）。
+ * Email 節點交給 sendEmail activity 寄出後直接往下走。
+ * 新 Task 寄信給處理人，Return 與完成寄信給發起人（見 notify）；信件只有 Request 標題、Process 名稱與連結。
  *
  * Return、重新送出與 Withdraw 的狀態變化都由 API 在同一個 transaction 寫進 Postgres，workflow 只負責流轉：
  * - Task 被 Return：停下來，等發起人重新送出或 Withdraw；並行的其他分支也一起停下來。
@@ -122,6 +150,22 @@ export async function interpretProcess({
         if (!stopped()) node = next(node, edgeId);
         continue;
       }
+      // Email 節點是新的節點類型，舊的 history 裡不會出現，所以不需要 patched()。
+      // 寄不出去時不讓 Request 卡住，照樣往下走。
+      if (node.type === 'email') {
+        try {
+          await bestEffortMail.sendEmail({
+            requestId,
+            processVersionId,
+            nodeId: node.id,
+            visit: visit(node.id),
+          });
+        } catch (error) {
+          log.warn('Email 節點寄送失敗，略過', { requestId, nodeId: node.id, error });
+        }
+        if (!stopped()) node = next(node);
+        continue;
+      }
       // 審批節點的 autoApprove 是新的設定，舊的 history 裡不會出現；沒有設定的節點不會多呼叫 activity，
       // 行為和原本完全一樣，所以不需要 patched()。
       if (node.type === 'approval' && node.autoApprove) {
@@ -161,8 +205,12 @@ export async function interpretProcess({
           notRunning = inBranch ? 'inBranch' : 'outsideBranch';
           return undefined;
         }
+        await notify({ requestId, event: 'taskCreated', taskId });
         await condition(() => outcomes.has(taskId) || stopped());
-        if (outcomes.get(taskId) === 'returned') await condition(interrupted);
+        if (outcomes.get(taskId) === 'returned') {
+          await notify({ requestId, event: 'returned' });
+          await condition(interrupted);
+        }
       }
       if (!stopped()) node = next(node);
     }
@@ -183,6 +231,7 @@ export async function interpretProcess({
     });
   if (notRunning) return;
   await completeRequest(requestId);
+  await notify({ requestId, event: 'completed' });
 }
 
 /**

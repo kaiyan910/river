@@ -253,6 +253,8 @@ function describeEvent(e: RequestEvent): string {
       return e.edge?.branch?.type === 'expression'
         ? `「${e.node?.name}」符合 ${branchLabel(e.edge.branch)}，流轉到「${e.edge.target.name}」`
         : `「${e.node?.name}」沒有符合的條件，走預設分支到「${e.edge?.target.name}」`;
+    case 'step.email_sent':
+      return `「${e.node?.name}」寄出 Email 通知`;
     case 'request.resubmitted':
       return `${e.actor?.name} 修改後重新送出，從頭開始審批`;
     case 'request.withdrawn':

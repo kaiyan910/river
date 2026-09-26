@@ -21,6 +21,7 @@ import {
   GitFork,
   GitMerge,
   Loader2,
+  Mail,
   Split,
   Undo2,
   UserCheck,
@@ -59,6 +60,7 @@ interface RequestProgress {
  * 被 Return 的那一步標成 returned；重新送出後先前的核准都失效，所以只看這一輪的 Task 與事件。
  * 自動核准的步驟沒有 Task，看這一輪的 step.auto_approved；條件節點看這一輪的 step.branch_chosen。
  * 並行分支與匯合節點沒有 Task 也沒有事件：走進它們的每一步都完成（或被略過）時就算完成。
+ * Email 節點看這一輪的 step.email_sent；沒有收件人時不會寫事件，所以後面的步驟已經開始時也算完成。
  */
 function progressOf(request: RequestDetail): RequestProgress {
   const tasks = request.tasks.filter((t) => t.round === request.round);
@@ -66,6 +68,9 @@ function progressOf(request: RequestDetail): RequestProgress {
   const roundEvents = request.events.slice(roundStart + 1);
   const autoApproved = new Set(
     roundEvents.flatMap((e) => (e.type === 'step.auto_approved' && e.node ? [e.node.id] : [])),
+  );
+  const emailSent = new Set(
+    roundEvents.flatMap((e) => (e.type === 'step.email_sent' && e.node ? [e.node.id] : [])),
   );
   const chosen = new Map(
     roundEvents.flatMap((e) =>
@@ -75,7 +80,7 @@ function progressOf(request: RequestDetail): RequestProgress {
   inferChosenBranches(
     request.flow,
     chosen,
-    (id) => autoApproved.has(id) || tasks.some((t) => t.nodeId === id),
+    (id) => autoApproved.has(id) || emailSent.has(id) || tasks.some((t) => t.nodeId === id),
   );
   const { steps, reachable } = requestPath(request.flow, chosen);
   const byId = new Map(request.flow.nodes.map((n) => [n.id, n]));
@@ -99,6 +104,14 @@ function progressOf(request: RequestDetail): RequestProgress {
         return request.status === 'completed' ? 'done' : 'todo';
       case 'condition':
         return chosen.has(node.id) ? 'done' : 'todo';
+      case 'email': {
+        if (emailSent.has(node.id)) return 'done';
+        const after = request.flow.edges
+          .filter((e) => e.source === node.id)
+          .flatMap((e) => byId.get(e.target) ?? [])
+          .map(stateOf);
+        return after.some((s) => s !== 'todo' && s !== 'skipped') ? 'done' : 'todo';
+      }
       case 'parallelSplit':
       case 'parallelJoin': {
         const before = request.flow.edges
@@ -156,6 +169,8 @@ function progressOf(request: RequestDetail): RequestProgress {
             ? '走預設分支'
             : `符合 ${branchLabel(edge.branch)}`;
       else if (node.type === 'parallelSplit') caption = '各分支同時進行';
+      else if (node.type === 'email')
+        caption = emailSent.has(node.id) ? '已寄出 Email' : '寄送 Email';
       else if (node.type === 'parallelJoin')
         caption = state === 'done' ? '所有分支已完成' : '等所有分支完成';
       else if (autoApproved.has(node.id)) caption = '自動核准';
@@ -296,6 +311,7 @@ const FLOW_ICONS = {
   condition: Split,
   parallelSplit: GitFork,
   parallelJoin: GitMerge,
+  email: Mail,
   end: CircleStop,
 } as const;
 

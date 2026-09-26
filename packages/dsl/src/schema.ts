@@ -3,7 +3,7 @@ import { z } from 'zod';
 
 /**
  * Process DSL：以節點與邊組成的有向圖，以 JSON 儲存。
- * 目前有 start、form、approval、condition、parallelSplit、parallelJoin、end。
+ * 目前有 start、form、approval、condition、parallelSplit、parallelJoin、email、end。
  * Form 屬於 Process，跟流程圖放在同一份 DSL，發佈時一起存成 Process Version 的快照。
  */
 
@@ -89,6 +89,31 @@ export const parallelSplitNodeSchema = z.object({ ...nodeBase, type: z.literal('
 /** 並行匯合：等到對應的 parallelSplit 的每一條分支都走到這裡，Request 才繼續往下走。 */
 export const parallelJoinNodeSchema = z.object({ ...nodeBase, type: z.literal('parallelJoin') });
 
+/**
+ * Email 節點的收件對象：特定 Participant、一個 Role（寄給每一位沒有停用的成員）、發起人，或發起人的 Manager
+ * （發起人沒有 Manager 或 Manager 已停用時不寄出）。
+ */
+export const emailRecipientSchema = z.discriminatedUnion('type', [
+  participantAssigneeSchema,
+  roleAssigneeSchema,
+  z.object({ type: z.literal('initiator') }),
+  z.object({ type: z.literal('manager') }),
+]);
+export type EmailRecipient = z.infer<typeof emailRecipientSchema>;
+
+/**
+ * Email 節點：流程走到這裡時寄一封信，寄出後直接往下走。
+ * 主旨與內文是訊息範本，只能用非敏感的變數（見 EMAIL_TEMPLATE_VARIABLES），不能引用 Form 資料；
+ * 信件一律附上回到 Request 的連結。草稿中收件對象可以還沒設定（null），發佈前由檢查器擋下。
+ */
+export const emailNodeSchema = z.object({
+  ...nodeBase,
+  type: z.literal('email'),
+  recipient: emailRecipientSchema.nullable(),
+  subject: z.string().max(200),
+  message: z.string().max(2000),
+});
+
 export const processNodeSchema = z.discriminatedUnion('type', [
   startNodeSchema,
   formNodeSchema,
@@ -96,6 +121,7 @@ export const processNodeSchema = z.discriminatedUnion('type', [
   conditionNodeSchema,
   parallelSplitNodeSchema,
   parallelJoinNodeSchema,
+  emailNodeSchema,
   endNodeSchema,
 ]);
 export type ProcessNode = z.infer<typeof processNodeSchema>;
@@ -147,13 +173,18 @@ export interface GraphShape {
 }
 
 /**
- * 由系統自動處理、不是 Participant 會經過的一步的節點（條件、並行分支、並行匯合）：
+ * 由系統自動處理、不是 Participant 會經過的一步的節點（條件、並行分支、並行匯合、Email）：
  * 流程預覽不列出，畫布與流程圖上畫成虛線框。
  */
 export function isSystemNode<T extends { type: NodeType }>(
   node: T,
-): node is Extract<T, { type: 'condition' | 'parallelSplit' | 'parallelJoin' }> {
-  return node.type === 'condition' || node.type === 'parallelSplit' || node.type === 'parallelJoin';
+): node is Extract<T, { type: 'condition' | 'parallelSplit' | 'parallelJoin' | 'email' }> {
+  return (
+    node.type === 'condition' ||
+    node.type === 'parallelSplit' ||
+    node.type === 'parallelJoin' ||
+    node.type === 'email'
+  );
 }
 
 export const NODE_TYPE_LABELS: Record<NodeType, string> = {
@@ -163,6 +194,7 @@ export const NODE_TYPE_LABELS: Record<NodeType, string> = {
   condition: '條件',
   parallelSplit: '並行分支',
   parallelJoin: '並行匯合',
+  email: 'Email',
   end: '結束',
 };
 

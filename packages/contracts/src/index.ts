@@ -234,6 +234,7 @@ export const processFlowSchema = z.object({
         'condition',
         'parallelSplit',
         'parallelJoin',
+        'email',
         'end',
       ]),
       name: z.string(),
@@ -354,6 +355,7 @@ export const requestEventTypeSchema = z.enum([
   'task.superseded',
   'step.auto_approved',
   'step.branch_chosen',
+  'step.email_sent',
   'request.resubmitted',
   'request.withdrawn',
   'request.completed',
@@ -383,8 +385,8 @@ export const requestEventSchema = z.object({
   /** task.created：發起人沒有 Manager 或 Manager 已停用，Task 改派給 Fallback Role 時的原因；其他為 null。 */
   fallbackReason: fallbackReasonSchema.nullable(),
   /**
-   * step.auto_approved：自動核准的審批步驟；step.branch_chosen：做出判斷的條件節點。
-   * 這兩種事件沒有 Task；其他為 null。不含自動核准的條件。
+   * step.auto_approved：自動核准的審批步驟；step.branch_chosen：做出判斷的條件節點；step.email_sent：寄出信件的 Email 節點。
+   * 這幾種事件沒有 Task；其他為 null。不含自動核准的條件，也不含收件人與信件內容。
    */
   node: z.object({ id: z.string(), name: z.string() }).nullable(),
   /** step.branch_chosen：條件節點選中的出邊、它的條件，以及走向的節點；其他為 null。 */

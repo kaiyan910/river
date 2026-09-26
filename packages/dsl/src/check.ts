@@ -1,5 +1,6 @@
 import { checkForm, FORM_ERROR_CODES } from '@river/forms';
 import jsonata from 'jsonata';
+import { EMAIL_TEMPLATE_VARIABLES, unknownTemplateVariables } from './email-template.js';
 import { parallelPairings } from './parallel.js';
 import { formIdOf, type ProcessDsl } from './schema.js';
 
@@ -23,6 +24,9 @@ export const DSL_ERROR_CODES = [
   'PARALLEL_SPLIT_UNMATCHED',
   'PARALLEL_JOIN_UNMATCHED',
   'PARALLEL_BRANCH_CROSSED',
+  'EMAIL_NO_RECIPIENT',
+  'EMAIL_NO_SUBJECT',
+  'EMAIL_UNKNOWN_VARIABLE',
   ...FORM_ERROR_CODES,
 ] as const;
 export type DslErrorCode = (typeof DSL_ERROR_CODES)[number];
@@ -169,6 +173,37 @@ export function checkProcess(dsl: ProcessDsl): DslError[] {
   }
 
   errors.push(...checkParallel(dsl));
+
+  for (const node of dsl.nodes) {
+    if (node.type !== 'email') continue;
+    if (!node.recipient)
+      errors.push({
+        nodeId: node.id,
+        code: 'EMAIL_NO_RECIPIENT',
+        message: `Email「${node.name}」還沒有設定收件對象。`,
+      });
+    if (!node.subject.trim())
+      errors.push({
+        nodeId: node.id,
+        code: 'EMAIL_NO_SUBJECT',
+        message: `Email「${node.name}」還沒有填寫主旨。`,
+      });
+    const allowed = Object.keys(EMAIL_TEMPLATE_VARIABLES)
+      .map((v) => `{{${v}}}`)
+      .join('、');
+    for (const [part, template] of [
+      ['主旨', node.subject],
+      ['內文', node.message],
+    ] as const) {
+      const unknown = unknownTemplateVariables(template);
+      if (unknown.length > 0)
+        errors.push({
+          nodeId: node.id,
+          code: 'EMAIL_UNKNOWN_VARIABLE',
+          message: `Email「${node.name}」的${part}用了不能用的變數 ${unknown.map((v) => `{{${v}}}`).join('、')}；信件不能包含 Form 資料，只能用 ${allowed}。`,
+        });
+    }
+  }
 
   const formIds = new Set(dsl.forms.map((f) => f.id));
   for (const node of dsl.nodes) {

@@ -180,7 +180,7 @@ River 是一個公司內部的 low-code 審批平台：
 
 - **對應方式**：每筆 Request 對應一個 workflow，workflow ID 等於 Request ID。輸入只有 Request ID 和 Process Version ID。
 - **Signals**：`taskCompleted`（帶 taskId 和結果）、`resubmitted`、`withdraw`、`cancel`、`reassign`。Signal 必須冪等：workflow 忽略重複的 taskId，以及已經 superseded 的 Task。
-- **Activities**：`loadProcessVersion`、`createTask`、`supersedeTasks`、`evaluateCondition`（從 Postgres 讀取資料後執行 JSONata，只回傳選中的出邊 ID）、`sendEmail`、`httpRequest`（在 activity 內解密 Credential）、`sendReminder`、`escalateTask`、`recordEvent`、`completeRequest`。
+- **Activities**：`loadProcessVersion`、`createTask`、`supersedeTasks`、`evaluateCondition`（從 Postgres 讀取資料後執行 JSONata，只回傳選中的出邊 ID）、`sendEmail`（Email 節點）、`notify`（新 Task、Return、完成的通知）、`httpRequest`（在 activity 內解密 Credential）、`sendReminder`、`escalateTask`、`recordEvent`、`completeRequest`。
 - **Timers**：Reminder 和 Escalation 用 workflow 內的 durable timer 實作。
 - **Return 迴圈**：Return 後重新開始時，在適當的時機呼叫 `continueAsNew`。
 - **排程發起**：使用 Temporal Schedule。

@@ -228,6 +228,7 @@ export const REQUEST_EVENT_TYPES = [
   'task.superseded',
   'step.auto_approved',
   'step.branch_chosen',
+  'step.email_sent',
   'request.resubmitted',
   'request.withdrawn',
   'request.completed',
@@ -254,8 +255,8 @@ export const requestEvents = pgTable(
     /** task.created：Task 因為找不到有效的 Manager 而改派給 Fallback Role 時的原因；其他情況為 null。 */
     fallbackReason: text('fallback_reason').$type<FallbackReason>(),
     /**
-     * step.auto_approved：自動核准的審批節點；step.branch_chosen：做出判斷的條件節點。
-     * 都是 Process Version 裡的節點 ID；這兩種事件沒有 Task。
+     * step.auto_approved：自動核准的審批節點；step.branch_chosen：做出判斷的條件節點；
+     * step.email_sent：寄出信件的 Email 節點。都是 Process Version 裡的節點 ID；這幾種事件沒有 Task。
      */
     nodeId: text('node_id'),
     /** step.branch_chosen：條件節點選中的出邊（Process Version 裡的連線 ID）。 */
