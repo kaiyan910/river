@@ -92,6 +92,14 @@ export class ProcessesController {
     return this.processes.rename(id, body.name);
   }
 
+  @Post(':id/draft')
+  @RequirePermission('process.edit')
+  @ApiCreatedResponse({ type: ProcessDto, description: '從目前版本建立的新草稿' })
+  @ApiConflictResponse({ description: '已經有草稿，或還沒發佈過' })
+  createDraft(@Id() id: string, @CurrentParticipant() me: ActiveParticipant): Promise<ProcessDto> {
+    return this.processes.createDraft(id, me);
+  }
+
   @Put(':id/draft')
   @RequirePermission('process.edit')
   @ApiOkResponse({ type: ProcessDto })

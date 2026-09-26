@@ -142,6 +142,29 @@ export class ProcessesService {
     return this.get(id);
   }
 
+  /**
+   * 從目前版本建立新草稿：複製目前版本的 DSL（含 Form）。之後對草稿的修改不影響任何 Process Version。
+   * 已經有草稿時不覆蓋；還沒發佈過的 Process 沒有目前版本可以複製。
+   */
+  async createDraft(id: string, me: ActiveParticipant): Promise<Process> {
+    await this.db.transaction(async (tx) => {
+      const [process] = await tx
+        .select({ draft: processes.draft })
+        .from(processes)
+        .where(eq(processes.id, id))
+        .for('update');
+      if (!process) throw new NotFoundException('找不到這個 Process');
+      if (process.draft) throw new ConflictException('已經有草稿，請直接編輯或先捨棄草稿');
+      const [current] = await currentVersions(tx, id);
+      if (!current) throw new ConflictException('還沒發佈過的 Process 沒有目前版本可以建立草稿');
+      await tx
+        .update(processes)
+        .set({ draft: current.dsl, draftSavedAt: new Date(), draftSavedBy: me.id })
+        .where(eq(processes.id, id));
+    });
+    return this.get(id);
+  }
+
   /** 以整份 DSL 取代草稿。還沒通過發佈前檢查也可以儲存。 */
   async saveDraft(id: string, dsl: ProcessDsl, me: ActiveParticipant): Promise<Process> {
     const [updated] = await this.db

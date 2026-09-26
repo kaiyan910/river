@@ -48,6 +48,16 @@ export function useRenameProcess() {
   });
 }
 
+/** 從目前版本建立新草稿（複製目前版本的流程圖與 Form）。 */
+export function useCreateDraft() {
+  const updated = useProcessUpdated();
+  return useMutation({
+    mutationFn: (id: string) =>
+      api(`/processes/${id}/draft`, { method: 'POST', schema: processSchema }),
+    onSuccess: updated,
+  });
+}
+
 export function useSaveDraft() {
   const updated = useProcessUpdated();
   return useMutation({

@@ -45,6 +45,7 @@ import {
   processesQueryOptions,
   processQueryOptions,
   publishRejection,
+  useCreateDraft,
   useCreateProcess,
   useDiscardDraft,
   usePublishProcess,
@@ -263,11 +264,15 @@ function ProcessEditor({ process, me }: { process: Process; me: MeResponse }) {
   const canvasRef = useRef<HTMLDivElement>(null);
   const save = useSaveDraft();
   const discard = useDiscardDraft();
+  const createDraft = useCreateDraft();
   const canPublish = me.permissions.includes('process.publish');
   const current = process.versions.at(-1);
   const viewing =
     typeof tab === 'number' ? process.versions.find((v) => v.version === tab) : undefined;
   const hasDraft = !!process.draft || dirty;
+  /** 已發佈、還沒有草稿：草稿分頁顯示目前版本，要先從目前版本建立草稿才能修改。 */
+  const needsDraft = !hasDraft && !!current;
+  const editing = tab === 'draft' && !needsDraft;
 
   useBlocker({
     shouldBlockFn: () => dirty && !window.confirm('草稿有未儲存的變更，確定要離開嗎？'),
@@ -316,6 +321,17 @@ function ProcessEditor({ process, me }: { process: Process; me: MeResponse }) {
     );
   }
 
+  function startDraft() {
+    if (!current) return;
+    createDraft.mutate(process.id, {
+      onSuccess: () => {
+        canvas.reset(current.dsl);
+        toast(`已從 v${current.version} 建立草稿`);
+      },
+      onError: (error) => toast(error.message, 'error'),
+    });
+  }
+
   function discardDraft() {
     if (!current) return;
     if (!window.confirm(`捨棄草稿後會回到 v${current.version}，草稿的改動都會消失。確定嗎？`))
@@ -360,7 +376,8 @@ function ProcessEditor({ process, me }: { process: Process; me: MeResponse }) {
           className="flex items-center gap-0.5 rounded-lg bg-muted p-0.5 text-[0.9em]"
         >
           <TabButton active={tab === 'draft'} onClick={() => setTab('draft')}>
-            草稿{!hasDraft && current ? `（同 v${current.version}）` : ''}
+            草稿
+            {needsDraft && <span className="text-[0.8em] text-muted-foreground">（無）</span>}
           </TabButton>
           {[...process.versions].reverse().map((v) => (
             <TabButton key={v.version} active={tab === v.version} onClick={() => setTab(v.version)}>
@@ -373,7 +390,12 @@ function ProcessEditor({ process, me }: { process: Process; me: MeResponse }) {
           ))}
         </nav>
         <div className="flex-1" />
-        {tab === 'draft' && (
+        {tab === 'draft' && needsDraft && current && (
+          <Button size="sm" disabled={createDraft.isPending} onClick={startDraft}>
+            <Plus size={14} aria-hidden /> 從 v{current.version} 建立草稿
+          </Button>
+        )}
+        {editing && (
           <>
             <span className="text-[0.85em] text-muted-foreground">
               {dirty
@@ -412,7 +434,7 @@ function ProcessEditor({ process, me }: { process: Process; me: MeResponse }) {
         )}
       </header>
 
-      {!viewing && (
+      {editing && (
         <nav
           aria-label="流程與 Form"
           className="flex items-end gap-1 overflow-x-auto border-b bg-muted/40 px-3 pt-1.5"
@@ -445,6 +467,12 @@ function ProcessEditor({ process, me }: { process: Process; me: MeResponse }) {
 
       {viewing ? (
         <VersionView key={viewing.version} version={viewing} />
+      ) : needsDraft && current ? (
+        <VersionView
+          key={`draft-${current.version}`}
+          version={current}
+          notice={`目前沒有草稿。從 v${current.version} 建立草稿後才能修改；草稿的修改不影響 v${current.version}，發佈前進行中的 Request 也不受影響。`}
+        />
       ) : openForm ? (
         <>
           <FormSheet
@@ -1370,18 +1398,26 @@ function ErrorList({ errors, onPick }: { errors: DslError[]; onPick?: (e: DslErr
   );
 }
 
-function VersionView({ version }: { version: ProcessVersion }) {
+/** 已發佈版本的唯讀畫布；notice 是顯示在上方的說明（草稿分頁還沒有草稿時使用）。 */
+function VersionView({ version, notice }: { version: ProcessVersion; notice?: string }) {
   const { nodes, edges } = useProcessCanvas(version.dsl);
   return (
     <CanvasFormsContext.Provider value={version.dsl.forms}>
       <div className="relative min-h-0 flex-1">
-        <div className="-translate-x-1/2 absolute top-3 left-1/2 z-10 flex max-w-[90%] items-center gap-2 rounded-full border bg-card px-3 py-1.5 text-[0.88em] shadow-sm">
-          <Lock size={13} className="shrink-0" aria-hidden />
-          <span className="truncate">
-            Process Version {version.version} 不可修改 · {version.publishedBy.name} 發佈於{' '}
-            {formatTime(version.publishedAt)}
-            {version.note && <span className="text-muted-foreground"> · {version.note}</span>}
-          </span>
+        <div className="-translate-x-1/2 absolute top-3 left-1/2 z-10 grid max-w-[90%] justify-items-center gap-1.5">
+          <div className="flex max-w-full items-center gap-2 rounded-full border bg-card px-3 py-1.5 text-[0.88em] shadow-sm">
+            <Lock size={13} className="shrink-0" aria-hidden />
+            <span className="truncate">
+              Process Version {version.version} 不可修改 · {version.publishedBy.name} 發佈於{' '}
+              {formatTime(version.publishedAt)}
+              {version.note && <span className="text-muted-foreground"> · {version.note}</span>}
+            </span>
+          </div>
+          {notice && (
+            <p className="rounded-lg border bg-card px-3 py-1.5 text-center text-[0.85em] text-muted-foreground shadow-sm">
+              {notice}
+            </p>
+          )}
         </div>
         <ReactFlow
           nodes={nodes}

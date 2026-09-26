@@ -153,7 +153,7 @@ export const processDraftSchema = z.object({
 });
 export type ProcessDraft = z.infer<typeof processDraftSchema>;
 
-/** `GET /api/processes/:id`。draft 為 null 代表目前版本之後沒有改動。 */
+/** `GET /api/processes/:id`；`POST /api/processes/:id/draft`（從目前版本建立新草稿）也回傳它。draft 為 null 代表目前版本之後沒有改動。 */
 export const processSchema = z.object({
   id: z.string(),
   name: z.string(),

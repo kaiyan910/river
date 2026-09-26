@@ -128,7 +128,7 @@ export const processes = pgTable('processes', {
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
-/** 已發佈的 Process Version：只新增、不修改。版本號最大的是目前版本。 */
+/** 已發佈的 Process Version：只新增、不修改（資料庫 trigger 擋下 UPDATE 與 DELETE）。版本號最大的是目前版本。 */
 export const processVersions = pgTable(
   'process_versions',
   {

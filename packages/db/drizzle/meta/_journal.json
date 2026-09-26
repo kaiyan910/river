@@ -71,6 +71,13 @@
       "when": 1790404665660,
       "tag": "0009_branch_chosen",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1790421925957,
+      "tag": "0010_process_versions_immutable",
+      "breakpoints": true
     }
   ]
 }
