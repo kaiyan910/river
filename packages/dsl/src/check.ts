@@ -1,5 +1,6 @@
 import { checkForm, FORM_ERROR_CODES } from '@river/forms';
 import jsonata from 'jsonata';
+import { parallelPairings } from './parallel.js';
 import { formIdOf, type ProcessDsl } from './schema.js';
 
 export const DSL_ERROR_CODES = [
@@ -18,6 +19,10 @@ export const DSL_ERROR_CODES = [
   'CONDITION_EDGE_NO_EXPRESSION',
   'INVALID_JSONATA',
   'AUTO_APPROVAL_NO_EXPRESSION',
+  'PARALLEL_TOO_FEW_BRANCHES',
+  'PARALLEL_SPLIT_UNMATCHED',
+  'PARALLEL_JOIN_UNMATCHED',
+  'PARALLEL_BRANCH_CROSSED',
   ...FORM_ERROR_CODES,
 ] as const;
 export type DslErrorCode = (typeof DSL_ERROR_CODES)[number];
@@ -25,7 +30,10 @@ export type DslErrorCode = (typeof DSL_ERROR_CODES)[number];
 export interface DslError {
   /** 出錯的節點；整份流程層級與 Form 本身的錯誤為 null。 */
   nodeId: string | null;
-  /** 條件節點某一條出邊的錯誤：哪一條出邊（nodeId 是條件節點）。審批節點 Auto-approval 的錯誤沒有這個欄位。 */
+  /**
+   * 出錯的連線：條件節點某一條出邊的錯誤（nodeId 是條件節點），
+   * 或從並行分支外面連進分支裡的連線（nodeId 是連線的起點）。其他錯誤沒有這個欄位。
+   */
   edgeId?: string;
   code: DslErrorCode;
   message: string;
@@ -160,6 +168,8 @@ export function checkProcess(dsl: ProcessDsl): DslError[] {
     }
   }
 
+  errors.push(...checkParallel(dsl));
+
   const formIds = new Set(dsl.forms.map((f) => f.id));
   for (const node of dsl.nodes) {
     if (node.type === 'form') {
@@ -198,6 +208,90 @@ export function checkProcess(dsl: ProcessDsl): DslError[] {
           message: e.message,
         });
 
+  return errors;
+}
+
+/**
+ * split 與 join 必須配對：每個 split 至少兩條分支，每一條分支最後都回到同一個 join（中間可以有條件與內層的並行分支），
+ * 每個 join 剛好屬於一個 split；分支之間不能互相連線，分支外面也不能直接連進分支裡或 join。
+ * interpreter 依這個結構同時執行各條分支，所以配對不起來的流程不能發佈。
+ */
+function checkParallel(dsl: ProcessDsl): DslError[] {
+  const errors: DslError[] = [];
+  const byId = new Map(dsl.nodes.map((n) => [n.id, n]));
+  const nameOf = (id: string) => byId.get(id)?.name ?? id;
+  const pairings = parallelPairings(dsl);
+  const matched = (joinId: string) => [...pairings.values()].filter((p) => p.join === joinId);
+  const crossed = new Set<string>();
+
+  for (const [splitId, pairing] of pairings) {
+    const split = nameOf(splitId);
+    if (pairing.branches.length < 2)
+      errors.push({
+        nodeId: splitId,
+        code: 'PARALLEL_TOO_FEW_BRANCHES',
+        message: `並行分支「${split}」至少要有兩條出邊。`,
+      });
+    const { join } = pairing;
+    if (!join) {
+      if (!pairing.innerUnmatched)
+        errors.push({
+          nodeId: splitId,
+          code: 'PARALLEL_SPLIT_UNMATCHED',
+          message: `並行分支「${split}」的每一條分支都必須回到同一個並行匯合節點。`,
+        });
+      continue;
+    }
+
+    const region = new Set<string>();
+    let overlapping = false;
+    for (const branch of pairing.branches)
+      for (const id of branch.nodes) {
+        if (region.has(id)) overlapping = true;
+        region.add(id);
+      }
+    if (overlapping)
+      errors.push({
+        nodeId: splitId,
+        code: 'PARALLEL_BRANCH_CROSSED',
+        message: `並行分支「${split}」的分支之間不能互相連線。`,
+      });
+
+    // 多個 split 共用的 join 已經由 PARALLEL_JOIN_UNMATCHED 回報，不再逐條回報連進 join 的連線。
+    const guarded = matched(join).length > 1 ? region : new Set([...region, join]);
+    for (const edge of dsl.edges) {
+      if (!guarded.has(edge.target) || edge.source === splitId || region.has(edge.source)) continue;
+      if (crossed.has(edge.id) || !byId.has(edge.source)) continue;
+      crossed.add(edge.id);
+      errors.push({
+        nodeId: edge.source,
+        edgeId: edge.id,
+        code: 'PARALLEL_BRANCH_CROSSED',
+        message: `「${nameOf(edge.source)}」連進了並行分支「${split}」裡面；分支只能從並行分支節點進入。`,
+      });
+    }
+  }
+
+  for (const node of dsl.nodes) {
+    if (node.type !== 'parallelJoin') continue;
+    const splits = matched(node.id).length;
+    // 配對不起來的 split 走到了這個 join：錯誤已經回報在 split 上。
+    const reachedByUnmatched = [...pairings.values()].some(
+      (p) => !p.join && p.terminals.has(node.id),
+    );
+    if (splits > 1)
+      errors.push({
+        nodeId: node.id,
+        code: 'PARALLEL_JOIN_UNMATCHED',
+        message: `並行匯合「${node.name}」同時是多個並行分支的匯合點；每個並行分支要有自己的並行匯合。`,
+      });
+    else if (splits === 0 && !reachedByUnmatched)
+      errors.push({
+        nodeId: node.id,
+        code: 'PARALLEL_JOIN_UNMATCHED',
+        message: `並行匯合「${node.name}」沒有對應的並行分支節點。`,
+      });
+  }
   return errors;
 }
 

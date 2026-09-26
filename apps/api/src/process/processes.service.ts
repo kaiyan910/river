@@ -28,6 +28,7 @@ import {
   checkProcess,
   formIdOf,
   initialProcessDsl,
+  isSystemNode,
   nodesInOrder,
   type ProcessDsl,
   type ProcessNode,
@@ -347,11 +348,11 @@ function stepAssignee(names: Names, assignee: Assignee): StepAssignee {
 
 /**
  * 流程預覽：依流程順序列出每個節點（條件分支上的節點也列出），審批與填表節點帶處理人，開始與填表節點帶 Form。
- * 條件節點由系統自動判斷，不是 Participant 會經過的一步，所以不列出。
+ * 條件、並行分支與並行匯合節點由系統自動處理，不是 Participant 會經過的一步，所以不列出。
  */
 export function stepsOf(dsl: ProcessDsl, names: Names): ProcessStep[] {
   return nodesInOrder(dsl).flatMap((node) => {
-    if (node.type === 'condition') return [];
+    if (isSystemNode(node)) return [];
     const assignee =
       node.type === 'approval' || node.type === 'form' ? (node.assignee ?? null) : null;
     return [

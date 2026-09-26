@@ -60,6 +60,10 @@ _Avoid_: Starter, allowed users
 Designer 在 Process 上指定的 Role，其成員可以查看該 Process 所有 Request 的內容與歷程。
 _Avoid_: Viewer, watcher
 
+**Parallel Branch**（並行分支）:
+Process 裡讓幾個步驟同時進行的一段：從並行分支節點的每一條出邊各走一條分支，每一條都走到配對的並行匯合節點後，Request 才繼續往下走。任一條分支被 Return 時，其他分支上的 Task 一併作廢。
+_Avoid_: Fork, 會簽, 用「並行分支」稱呼其中單獨一條分支（稱「分支」）
+
 **Credential**:
 集中管理、加密儲存的外部系統憑證（API key、token），自動步驟只以名稱引用它，Process Version 不含秘密本身。
 _Avoid_: Secret, connection, key

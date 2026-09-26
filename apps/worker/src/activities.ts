@@ -3,6 +3,7 @@ import {
   type FallbackReason,
   participants,
   processVersions,
+  type RequestEventType,
   requestData,
   requestEvents,
   requests,
@@ -12,7 +13,7 @@ import {
 import type { ProcessDsl } from '@river/dsl';
 import { chooseBranch, shouldAutoApprove } from '@river/dsl/branch';
 import { ApplicationFailure, log } from '@temporalio/activity';
-import { and, asc, desc, eq, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, inArray, or, sql } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
 
 export interface CreateTaskInput {
@@ -36,6 +37,8 @@ export interface EvaluateConditionInput {
   processVersionId: string;
   /** 條件節點的 ID。 */
   nodeId: string;
+  /** 這一輪第幾次走到這個節點（從 1 開始），重試時用來找回當時的結果；舊的 workflow 沒有這個欄位。 */
+  visit?: number;
 }
 
 export interface EvaluateAutoApprovalInput {
@@ -43,6 +46,8 @@ export interface EvaluateAutoApprovalInput {
   processVersionId: string;
   /** 設定了 Auto-approval 的審批節點的 ID。 */
   nodeId: string;
+  /** 同 EvaluateConditionInput.visit。 */
+  visit?: number;
 }
 
 const managers = alias(participants, 'managers');
@@ -166,11 +171,10 @@ export function createActivities(db: Database) {
      * 不成立、執行時出錯，或 Request 已經不是 running 都回傳 false，由 workflow 照常建立 Task（往安全的方向失敗；
      * Request 已經結束時 createTask 不會建立）。
      * 重試時以已經寫入的事件為準，不重新判斷（表達式用到 $now() 時結果可能不同）：
-     * 最後一筆事件是這一步的自動核准，就表示上一次已經寫入。workflow 走到這一步時沒有 open 的 Task，
-     * 其他事件只會來自 Withdraw，而 Withdraw 會讓 Request 不再是 running。
+     * 這一輪第 visit 次走到這一步的結果已經記錄下來，就表示上一次已經寫入（見 earlierVisit）。
      */
     async evaluateAutoApproval(input: EvaluateAutoApprovalInput): Promise<boolean> {
-      if (await lastEventIsAutoApproval(db, input)) return true;
+      if (await alreadyAutoApproved(db, input)) return true;
       const { dsl, data } = await loadRound(db, input);
       const node = dsl.nodes.find((n) => n.id === input.nodeId);
       const expression = node?.type === 'approval' ? node.autoApprove?.expression : undefined;
@@ -192,7 +196,7 @@ export function createActivities(db: Database) {
           .where(eq(requests.id, input.requestId))
           .for('update');
         if (request?.status !== 'running') return false;
-        if (await lastEventIsAutoApproval(tx, input)) return true;
+        if (await alreadyAutoApproved(tx, input)) return true;
         await tx.insert(requestEvents).values({
           requestId: input.requestId,
           type: 'step.auto_approved',
@@ -231,38 +235,73 @@ function jsonataErrorCode(error: unknown): unknown {
   return (error as { code?: unknown } | null)?.code;
 }
 
-async function lastEvent(db: Database | Tx, requestId: string) {
-  const [last] = await db
-    .select({
-      type: requestEvents.type,
-      nodeId: requestEvents.nodeId,
-      edgeId: requestEvents.edgeId,
-    })
+/**
+ * 這一輪第 input.visit 次走到這個節點時留下的紀錄：條件的判斷、自動核准，或為它建立的 Task；還沒有時為 undefined。
+ * 並行分支上其他分支隨時會寫入事件，所以不能只看 Request 的最後一筆事件，而是只數這個節點自己的紀錄。
+ * 條件節點每次判斷都會寫入事件；審批節點每次不是自動核准，就是建立了 Task，所以第幾次一定對得上。
+ * 舊的 workflow 沒有 visit（沒有並行分支）：沿用原本的做法，最後一筆事件是這個節點的紀錄才算。
+ */
+async function earlierVisit(
+  db: Database | Tx,
+  input: { requestId: string; nodeId: string; visit?: number },
+): Promise<{ type: RequestEventType; edgeId: string | null } | undefined> {
+  const ofRequest = eq(requestEvents.requestId, input.requestId);
+  if (input.visit === undefined) {
+    const [last] = await db
+      .select({
+        type: requestEvents.type,
+        nodeId: requestEvents.nodeId,
+        edgeId: requestEvents.edgeId,
+      })
+      .from(requestEvents)
+      .where(ofRequest)
+      .orderBy(desc(requestEvents.id))
+      .limit(1);
+    return last?.nodeId === input.nodeId ? last : undefined;
+  }
+
+  const [resubmitted] = await db
+    .select({ id: requestEvents.id })
     .from(requestEvents)
-    .where(eq(requestEvents.requestId, requestId))
+    .where(and(ofRequest, eq(requestEvents.type, 'request.resubmitted')))
     .orderBy(desc(requestEvents.id))
     .limit(1);
-  return last;
+  const visits = await db
+    .select({ type: requestEvents.type, edgeId: requestEvents.edgeId })
+    .from(requestEvents)
+    .leftJoin(tasks, eq(tasks.id, requestEvents.taskId))
+    .where(
+      and(
+        ofRequest,
+        gt(requestEvents.id, resubmitted?.id ?? 0),
+        or(
+          and(
+            inArray(requestEvents.type, ['step.branch_chosen', 'step.auto_approved']),
+            eq(requestEvents.nodeId, input.nodeId),
+          ),
+          and(eq(requestEvents.type, 'task.created'), eq(tasks.nodeId, input.nodeId)),
+        ),
+      ),
+    )
+    .orderBy(asc(requestEvents.id));
+  return visits[input.visit - 1];
 }
 
-/** Request 的最後一筆事件是不是這一步的自動核准（evaluateAutoApproval 重試時已經寫入）。 */
-async function lastEventIsAutoApproval(
+/** 這一輪第 visit 次走到這一步時已經自動核准（evaluateAutoApproval 重試時已經寫入）。 */
+async function alreadyAutoApproved(
   db: Database | Tx,
-  input: { requestId: string; nodeId: string },
+  input: { requestId: string; nodeId: string; visit?: number },
 ): Promise<boolean> {
-  const last = await lastEvent(db, input.requestId);
-  return last?.type === 'step.auto_approved' && last.nodeId === input.nodeId;
+  return (await earlierVisit(db, input))?.type === 'step.auto_approved';
 }
 
-/** 最後一筆事件是這個條件節點的判斷（evaluateCondition 重試時已經寫入）時，回傳當時選中的出邊。 */
+/** 這一輪第 visit 次走到這個條件節點時已經做出判斷（evaluateCondition 重試時已經寫入），回傳當時選中的出邊。 */
 async function branchAlreadyChosen(
   db: Database | Tx,
-  input: { requestId: string; nodeId: string },
+  input: { requestId: string; nodeId: string; visit?: number },
 ): Promise<string | undefined> {
-  const last = await lastEvent(db, input.requestId);
-  return last?.type === 'step.branch_chosen' && last.nodeId === input.nodeId
-    ? (last.edgeId ?? undefined)
-    : undefined;
+  const earlier = await earlierVisit(db, input);
+  return earlier?.type === 'step.branch_chosen' ? (earlier.edgeId ?? undefined) : undefined;
 }
 
 /**

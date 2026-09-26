@@ -227,7 +227,15 @@ export const processFlowSchema = z.object({
   nodes: z.array(
     z.object({
       id: z.string(),
-      type: z.enum(['start', 'form', 'approval', 'condition', 'end']),
+      type: z.enum([
+        'start',
+        'form',
+        'approval',
+        'condition',
+        'parallelSplit',
+        'parallelJoin',
+        'end',
+      ]),
       name: z.string(),
       position: z.object({ x: z.number(), y: z.number() }),
     }),

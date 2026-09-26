@@ -112,4 +112,75 @@ describe('Request 實際走的路徑', () => {
     };
     expect(ids(requestPath(graph, new Map()))).toEqual(['start', 'a', 'b']);
   });
+
+  /**
+   * start → split ─→ it → security ─┐
+   *               └→ finance ───────┴→ join → manager → end
+   */
+  const parallel: PathGraph = {
+    nodes: [
+      { id: 'start', type: 'start' },
+      { id: 'split', type: 'parallelSplit' },
+      { id: 'it', type: 'approval' },
+      { id: 'security', type: 'approval' },
+      { id: 'finance', type: 'approval' },
+      { id: 'join', type: 'parallelJoin' },
+      { id: 'manager', type: 'approval' },
+      { id: 'end', type: 'end' },
+    ],
+    edges: [
+      { id: 'e-start', source: 'start', target: 'split' },
+      { id: 'e-it', source: 'split', target: 'it' },
+      { id: 'e-finance', source: 'split', target: 'finance' },
+      { id: 'e-security', source: 'it', target: 'security' },
+      { id: 'e-security-join', source: 'security', target: 'join' },
+      { id: 'e-finance-join', source: 'finance', target: 'join' },
+      { id: 'e-join', source: 'join', target: 'manager' },
+      { id: 'e-end', source: 'manager', target: 'end' },
+    ],
+  };
+
+  it('並行分支的每一條分支都列出，依出邊順序一條接一條，最後接到匯合點', () => {
+    const path = requestPath(parallel, new Map());
+    expect(path.steps).toEqual([
+      { nodeId: 'start', via: null },
+      { nodeId: 'split', via: 'e-start' },
+      { nodeId: 'it', via: 'e-it' },
+      { nodeId: 'security', via: 'e-security' },
+      { nodeId: 'finance', via: 'e-finance' },
+      { nodeId: 'join', via: 'e-finance-join' },
+      { nodeId: 'manager', via: 'e-join' },
+      { nodeId: 'end', via: 'e-end' },
+    ]);
+    expect(path.reachable.size).toBe(parallel.nodes.length);
+  });
+
+  it('並行分支裡還沒判斷的條件，接到分支上的匯合點', () => {
+    const graph: PathGraph = {
+      nodes: [
+        ...parallel.nodes,
+        { id: 'check', type: 'condition' },
+        { id: 'cio', type: 'approval' },
+      ],
+      edges: [
+        ...parallel.edges.filter((e) => e.id !== 'e-security-join'),
+        { id: 'e-check', source: 'security', target: 'check' },
+        { id: 'e-cio', source: 'check', target: 'cio' },
+        { id: 'e-skip', source: 'check', target: 'join' },
+        { id: 'e-cio-join', source: 'cio', target: 'join' },
+      ],
+    };
+    expect(ids(requestPath(graph, new Map()))).toEqual([
+      'start',
+      'split',
+      'it',
+      'security',
+      'check',
+      'finance',
+      'join',
+      'manager',
+      'end',
+    ]);
+    expect(ids(requestPath(graph, new Map([['check', 'e-cio']])))).toContain('cio');
+  });
 });

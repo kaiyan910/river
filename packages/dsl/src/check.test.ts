@@ -450,4 +450,199 @@ describe('DSL 檢查', () => {
       ]);
     });
   });
+
+  describe('並行分支', () => {
+    const split = (id = 'split'): ProcessNode => ({
+      id,
+      type: 'parallelSplit',
+      name: `並行 ${id}`,
+      position: at,
+    });
+    const join = (id = 'join'): ProcessNode => ({
+      id,
+      type: 'parallelJoin',
+      name: `匯合 ${id}`,
+      position: at,
+    });
+    const condition = (id: string): ProcessNode => ({
+      id,
+      type: 'condition',
+      name: `條件 ${id}`,
+      position: at,
+    });
+    const when = (source: string, target: string, expression: string) => ({
+      ...edge(source, target),
+      branch: { type: 'expression' as const, expression },
+    });
+    const otherwise = (source: string, target: string) => ({
+      ...edge(source, target),
+      branch: { type: 'default' as const },
+    });
+    const codes = (dsl: ProcessDsl) => checkProcess(dsl).map((e) => [e.code, e.nodeId]);
+
+    /** start → split →（IT 審批、財務審批）→ join → end */
+    function parallel(): ProcessDsl {
+      return {
+        nodes: [start(), split(), approval('it'), approval('finance'), join(), end()],
+        edges: [
+          edge('start', 'split'),
+          edge('split', 'it'),
+          edge('split', 'finance'),
+          edge('it', 'join'),
+          edge('finance', 'join'),
+          edge('join', 'end'),
+        ],
+        forms: [],
+      };
+    }
+
+    it('每條分支都匯合到同一個 join 時沒有錯誤', () => {
+      expect(checkProcess(parallel())).toEqual([]);
+    });
+
+    it('DSL schema 接受並行分支與匯合節點', () => {
+      expect(processDslSchema.parse(parallel())).toEqual(parallel());
+    });
+
+    it('分支裡可以再有並行分支與條件節點，只要最後都回到同一個 join', () => {
+      const dsl = parallel();
+      // IT 這條分支：IT 審批 → 內層 split →（資安、網管）→ 內層 join → 金額判斷 →（CIO 或直接）→ join
+      dsl.nodes.push(
+        split('inner'),
+        approval('security'),
+        approval('network'),
+        join('inner-join'),
+        condition('amount'),
+        approval('cio'),
+      );
+      dsl.edges = dsl.edges.filter((e) => e.id !== 'it->join');
+      dsl.edges.push(
+        edge('it', 'inner'),
+        edge('inner', 'security'),
+        edge('inner', 'network'),
+        edge('security', 'inner-join'),
+        edge('network', 'inner-join'),
+        edge('inner-join', 'amount'),
+        when('amount', 'cio', 'amount > 10000'),
+        otherwise('amount', 'join'),
+        edge('cio', 'join'),
+      );
+      expect(checkProcess(dsl)).toEqual([]);
+    });
+
+    it('並行分支至少要有兩條出邊', () => {
+      const dsl = parallel();
+      dsl.edges = dsl.edges.filter((e) => e.id !== 'split->finance');
+      dsl.edges.push(edge('start', 'finance'));
+      expect(codes(dsl)).toContainEqual(['PARALLEL_TOO_FEW_BRANCHES', 'split']);
+    });
+
+    it('有一條分支沒有回到 join，直接走到「結束」', () => {
+      const dsl = parallel();
+      dsl.edges = dsl.edges.filter((e) => e.id !== 'finance->join');
+      dsl.edges.push(edge('finance', 'end'));
+      expect(checkProcess(dsl)).toEqual([
+        {
+          nodeId: 'split',
+          code: 'PARALLEL_SPLIT_UNMATCHED',
+          message: expect.stringContaining('並行 split'),
+        },
+      ]);
+    });
+
+    it('分支匯合到不同的 join', () => {
+      const dsl = parallel();
+      dsl.nodes.push(join('other-join'));
+      dsl.edges = dsl.edges.filter((e) => e.id !== 'finance->join');
+      dsl.edges.push(edge('finance', 'other-join'), edge('other-join', 'end'));
+      expect(codes(dsl)).toEqual([['PARALLEL_SPLIT_UNMATCHED', 'split']]);
+    });
+
+    it('沒有對應 split 的 join', () => {
+      const dsl = minimal();
+      dsl.nodes.push(join());
+      dsl.edges = [edge('start', 'manager'), edge('manager', 'join'), edge('join', 'end')];
+      expect(checkProcess(dsl)).toEqual([
+        {
+          nodeId: 'join',
+          code: 'PARALLEL_JOIN_UNMATCHED',
+          message: expect.stringContaining('匯合 join'),
+        },
+      ]);
+    });
+
+    it('兩個 split 共用同一個 join', () => {
+      // start → 判斷 →（split-a 或 split-b）；兩個 split 的分支都匯合到同一個 join
+      const dsl: ProcessDsl = {
+        nodes: [
+          start(),
+          condition('route'),
+          split('split-a'),
+          split('split-b'),
+          approval('a1'),
+          approval('a2'),
+          approval('b1'),
+          approval('b2'),
+          join(),
+          end(),
+        ],
+        edges: [
+          edge('start', 'route'),
+          when('route', 'split-a', 'amount > 100'),
+          otherwise('route', 'split-b'),
+          edge('split-a', 'a1'),
+          edge('split-a', 'a2'),
+          edge('split-b', 'b1'),
+          edge('split-b', 'b2'),
+          edge('a1', 'join'),
+          edge('a2', 'join'),
+          edge('b1', 'join'),
+          edge('b2', 'join'),
+          edge('join', 'end'),
+        ],
+        forms: [],
+      };
+      expect(codes(dsl)).toEqual([['PARALLEL_JOIN_UNMATCHED', 'join']]);
+    });
+
+    it('分支之間互相連線', () => {
+      const dsl = parallel();
+      dsl.edges = dsl.edges.filter((e) => e.id !== 'it->join');
+      dsl.edges.push(edge('it', 'finance'));
+      expect(codes(dsl)).toEqual([['PARALLEL_BRANCH_CROSSED', 'split']]);
+    });
+
+    it('從分支外面連進分支裡的節點，標出是哪一條連線', () => {
+      const dsl = parallel();
+      // start → 判斷 →（split 或直接跳到財務審批）
+      dsl.nodes.push(condition('shortcut'));
+      dsl.edges = dsl.edges.filter((e) => e.id !== 'start->split');
+      dsl.edges.push(
+        edge('start', 'shortcut'),
+        when('shortcut', 'split', 'amount > 100'),
+        otherwise('shortcut', 'finance'),
+      );
+      expect(checkProcess(dsl)).toEqual([
+        {
+          nodeId: 'shortcut',
+          edgeId: 'shortcut->finance',
+          code: 'PARALLEL_BRANCH_CROSSED',
+          message: expect.stringContaining('並行 split'),
+        },
+      ]);
+    });
+
+    it('內層的 split 沒有配對時只回報內層，不連帶回報外層', () => {
+      const dsl = parallel();
+      dsl.nodes.push(split('inner'), approval('security'));
+      dsl.edges = dsl.edges.filter((e) => e.id !== 'it->join');
+      dsl.edges.push(
+        edge('it', 'inner'),
+        edge('inner', 'security'),
+        edge('inner', 'join'),
+        edge('security', 'end'),
+      );
+      expect(codes(dsl)).toEqual([['PARALLEL_SPLIT_UNMATCHED', 'inner']]);
+    });
+  });
 });

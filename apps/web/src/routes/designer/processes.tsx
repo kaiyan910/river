@@ -648,6 +648,8 @@ const PALETTE: { type: NodeType; hint: string }[] = [
   { type: 'form', hint: '指派一位 Participant 填一份 Form' },
   { type: 'approval', hint: '指派一位 Participant 審批' },
   { type: 'condition', hint: '依 Form 資料（JSONata 表達式）走不同的出邊' },
+  { type: 'parallelSplit', hint: '每條出邊同時進行，例如 IT 和財務同時審批' },
+  { type: 'parallelJoin', hint: '等並行分支的每一條都完成，Request 才繼續' },
   { type: 'end', hint: '流程結束' },
 ];
 

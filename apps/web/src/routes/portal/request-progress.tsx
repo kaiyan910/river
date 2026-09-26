@@ -1,6 +1,6 @@
 import '@xyflow/react/dist/style.css';
 import type { ProcessFlow, RequestDetail } from '@river/contracts';
-import { requestPath } from '@river/dsl';
+import { isSystemNode, requestPath } from '@river/dsl';
 import {
   Background,
   Controls,
@@ -18,6 +18,8 @@ import {
   CirclePlay,
   CircleStop,
   ClipboardPen,
+  GitFork,
+  GitMerge,
   Loader2,
   Split,
   Undo2,
@@ -56,6 +58,7 @@ interface RequestProgress {
  * 每一步的狀態：已完成、目前（有 open Task）、處理中（workflow 正在走到這一步）、還沒到；
  * 被 Return 的那一步標成 returned；重新送出後先前的核准都失效，所以只看這一輪的 Task 與事件。
  * 自動核准的步驟沒有 Task，看這一輪的 step.auto_approved；條件節點看這一輪的 step.branch_chosen。
+ * 並行分支與匯合節點沒有 Task 也沒有事件：走進它們的每一步都完成（或被略過）時就算完成。
  */
 function progressOf(request: RequestDetail): RequestProgress {
   const tasks = request.tasks.filter((t) => t.round === request.round);
@@ -77,7 +80,17 @@ function progressOf(request: RequestDetail): RequestProgress {
   const { steps, reachable } = requestPath(request.flow, chosen);
   const byId = new Map(request.flow.nodes.map((n) => [n.id, n]));
 
+  const memo = new Map<string, StepState>();
   const stateOf = (node: FlowNode): StepState => {
+    const known = memo.get(node.id);
+    if (known) return known;
+    // 先記成 todo，迴圈繞回來時不會無限遞迴。
+    memo.set(node.id, 'todo');
+    const state = computeState(node);
+    memo.set(node.id, state);
+    return state;
+  };
+  const computeState = (node: FlowNode): StepState => {
     if (!reachable.has(node.id)) return 'skipped';
     switch (node.type) {
       case 'start':
@@ -86,6 +99,16 @@ function progressOf(request: RequestDetail): RequestProgress {
         return request.status === 'completed' ? 'done' : 'todo';
       case 'condition':
         return chosen.has(node.id) ? 'done' : 'todo';
+      case 'parallelSplit':
+      case 'parallelJoin': {
+        const before = request.flow.edges
+          .filter((e) => e.target === node.id)
+          .flatMap((e) => byId.get(e.source) ?? [])
+          .map(stateOf);
+        return before.includes('done') && before.every((s) => s === 'done' || s === 'skipped')
+          ? 'done'
+          : 'todo';
+      }
       default: {
         if (autoApproved.has(node.id)) return 'done';
         const task = tasks.findLast((t) => t.nodeId === node.id);
@@ -102,9 +125,14 @@ function progressOf(request: RequestDetail): RequestProgress {
   const path = steps.flatMap(({ nodeId, via }): PathItem[] => {
     const node = byId.get(nodeId);
     if (!node) return [];
+    // 並行分支上，路徑的前一步是另一條分支的最後一步，所以看走進這一步的連線的起點。
+    const source = byId.get(request.flow.edges.find((e) => e.id === via)?.source ?? '');
+    const cameFromDone = source ? stateOf(source) === 'done' : previousDone;
     let state = stateOf(node);
-    if (state === 'todo' && previousDone && isAdvancing(request)) state = 'advancing';
-    if (via && previousDone) walked.add(via);
+    // 並行分支與匯合節點一瞬間就走過，不會停在「處理中」。
+    const instant = node.type === 'parallelSplit' || node.type === 'parallelJoin';
+    if (state === 'todo' && !instant && cameFromDone && isAdvancing(request)) state = 'advancing';
+    if (via && cameFromDone) walked.add(via);
     previousDone = state === 'done';
     states.set(nodeId, state);
     return [{ node, via, state }];
@@ -127,6 +155,9 @@ function progressOf(request: RequestDetail): RequestProgress {
           : edge.branch.type === 'default'
             ? '走預設分支'
             : `符合 ${branchLabel(edge.branch)}`;
+      else if (node.type === 'parallelSplit') caption = '各分支同時進行';
+      else if (node.type === 'parallelJoin')
+        caption = state === 'done' ? '所有分支已完成' : '等所有分支完成';
       else if (autoApproved.has(node.id)) caption = '自動核准';
       else if (step?.assignee) caption = assigneeLabel(step.assignee);
       return [node.id, caption] as const;
@@ -263,6 +294,8 @@ const FLOW_ICONS = {
   form: ClipboardPen,
   approval: UserCheck,
   condition: Split,
+  parallelSplit: GitFork,
+  parallelJoin: GitMerge,
   end: CircleStop,
 } as const;
 
@@ -289,7 +322,7 @@ function FlowStep({ data: { node, state, caption } }: NodeProps<FlowStepNode>) {
       className={cn(
         'relative rounded-lg border bg-card px-3 py-2 shadow-sm',
         round && 'rounded-full text-center',
-        node.type === 'condition' && 'border-dashed',
+        isSystemNode(node) && 'border-dashed',
         FLOW_TONE[state],
       )}
     >

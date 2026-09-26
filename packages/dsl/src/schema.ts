@@ -3,7 +3,7 @@ import { z } from 'zod';
 
 /**
  * Process DSL：以節點與邊組成的有向圖，以 JSON 儲存。
- * 目前有 start、form、approval、condition、end；其他節點類型（parallelSplit…）由後續 ticket 加入。
+ * 目前有 start、form、approval、condition、parallelSplit、parallelJoin、end。
  * Form 屬於 Process，跟流程圖放在同一份 DSL，發佈時一起存成 Process Version 的快照。
  */
 
@@ -81,11 +81,21 @@ export const formNodeSchema = z.object({
 /** 條件節點：本身沒有設定，分支條件放在出邊上（見 branchSchema）。 */
 export const conditionNodeSchema = z.object({ ...nodeBase, type: z.literal('condition') });
 
+/**
+ * 並行分支：每一條出邊是一條同時進行的分支。本身沒有設定。
+ * 每個 parallelSplit 必須配對一個 parallelJoin，各條分支最後都回到它（見 checkProcess）。
+ */
+export const parallelSplitNodeSchema = z.object({ ...nodeBase, type: z.literal('parallelSplit') });
+/** 並行匯合：等到對應的 parallelSplit 的每一條分支都走到這裡，Request 才繼續往下走。 */
+export const parallelJoinNodeSchema = z.object({ ...nodeBase, type: z.literal('parallelJoin') });
+
 export const processNodeSchema = z.discriminatedUnion('type', [
   startNodeSchema,
   formNodeSchema,
   approvalNodeSchema,
   conditionNodeSchema,
+  parallelSplitNodeSchema,
+  parallelJoinNodeSchema,
   endNodeSchema,
 ]);
 export type ProcessNode = z.infer<typeof processNodeSchema>;
@@ -127,11 +137,32 @@ export function formIdOf(node: { type: NodeType; formId?: string | null }): stri
   return (node.type === 'start' || node.type === 'form') && node.formId ? node.formId : null;
 }
 
+/**
+ * 只有節點類型與連線的流程圖：算路徑、配對並行分支只需要這些。
+ * DSL 與 API 回傳給畫面的流程圖（ProcessFlow）都符合。
+ */
+export interface GraphShape {
+  nodes: readonly { id: string; type: NodeType }[];
+  edges: readonly { id: string; source: string; target: string }[];
+}
+
+/**
+ * 由系統自動處理、不是 Participant 會經過的一步的節點（條件、並行分支、並行匯合）：
+ * 流程預覽不列出，畫布與流程圖上畫成虛線框。
+ */
+export function isSystemNode<T extends { type: NodeType }>(
+  node: T,
+): node is Extract<T, { type: 'condition' | 'parallelSplit' | 'parallelJoin' }> {
+  return node.type === 'condition' || node.type === 'parallelSplit' || node.type === 'parallelJoin';
+}
+
 export const NODE_TYPE_LABELS: Record<NodeType, string> = {
   start: '開始',
   form: '填表',
   approval: '審批',
   condition: '條件',
+  parallelSplit: '並行分支',
+  parallelJoin: '並行匯合',
   end: '結束',
 };
 

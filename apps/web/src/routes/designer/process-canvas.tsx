@@ -5,6 +5,7 @@ import {
   type CanvasNodeData,
   checkProcess,
   fromCanvas,
+  isSystemNode,
   NODE_TYPE_LABELS,
   type NodeSettings,
   type NodeType,
@@ -32,6 +33,8 @@ import {
   CircleStop,
   ClipboardPen,
   FileText,
+  GitFork,
+  GitMerge,
   Split,
   UserCheck,
   UserRoundCheck,
@@ -52,6 +55,8 @@ export const NODE_ICONS = {
   form: ClipboardPen,
   approval: UserCheck,
   condition: Split,
+  parallelSplit: GitFork,
+  parallelJoin: GitMerge,
   end: CircleStop,
 } as const;
 
@@ -77,6 +82,8 @@ function newNode(type: NodeType, position: { x: number; y: number }): ProcessNod
       return { ...base, type, formId: null };
     case 'condition':
       return { ...base, type, name: '新的條件' };
+    case 'parallelSplit':
+    case 'parallelJoin':
     case 'end':
       return { ...base, type };
   }
@@ -244,7 +251,7 @@ function NodeCard({ data, selected, type }: NodeProps<RFNode>) {
         'relative rounded-lg border bg-card px-3 py-2 shadow-sm',
         round && 'rounded-full text-center',
         type === 'form' && 'border-l-4 border-l-status-returned',
-        type === 'condition' && 'border-dashed',
+        isSystemNode(data.node) && 'border-dashed',
         selected && 'border-primary ring-2 ring-primary/30',
         hasError && 'border-destructive ring-2 ring-destructive/25',
       )}
@@ -269,6 +276,12 @@ function NodeCard({ data, selected, type }: NodeProps<RFNode>) {
       )}
       {type === 'condition' && (
         <div className="mt-1 text-[0.85em] text-muted-foreground">依 Form 資料走不同的出邊</div>
+      )}
+      {type === 'parallelSplit' && (
+        <div className="mt-1 text-[0.85em] text-muted-foreground">每條出邊同時進行</div>
+      )}
+      {type === 'parallelJoin' && (
+        <div className="mt-1 text-[0.85em] text-muted-foreground">等所有分支完成才繼續</div>
       )}
       {(data.node.type === 'start' || data.node.type === 'form') && (
         <FormLine formId={data.node.formId} required={data.node.type === 'form'} />
@@ -369,5 +382,7 @@ export const nodeTypes = {
   form: NodeCard,
   approval: NodeCard,
   condition: NodeCard,
+  parallelSplit: NodeCard,
+  parallelJoin: NodeCard,
   end: NodeCard,
 };
