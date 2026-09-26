@@ -1472,10 +1472,9 @@ function AssigneeField({
     <div className="grid gap-1.5">
       <div className="flex items-center justify-between gap-2">
         <span className="text-[0.85em] text-muted-foreground">{label}</span>
-        <div
-          role="group"
+        <fieldset
           aria-label={`${label}的指派方式`}
-          className="inline-flex rounded-md bg-muted p-0.5 text-[0.8em]"
+          className="m-0 inline-flex min-w-0 rounded-md border-0 bg-muted p-0.5 text-[0.8em]"
         >
           {ASSIGNEE_MODES.map((m) => (
             <button
@@ -1496,7 +1495,7 @@ function AssigneeField({
               {m.label}
             </button>
           ))}
-        </div>
+        </fieldset>
       </div>
       {mode === 'participant' && (
         <ParticipantAssignee
