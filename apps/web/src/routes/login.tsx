@@ -30,7 +30,9 @@ export function LoginPage({ redirectTo }: { redirectTo: string }) {
       setError(error.status === 401 ? 'Email 或密碼不正確。' : '登入失敗，請稍後再試。');
       return;
     }
-    await queryClient.invalidateQueries({ queryKey: meQueryOptions.queryKey });
+    // 登入頁沒有訂閱 me，invalidateQueries 只會標成 stale 而不會重抓；
+    // 快取裡的 null 會讓 beforeLoad 又把人導回登入頁，所以要明確 refetch。
+    await queryClient.refetchQueries({ queryKey: meQueryOptions.queryKey });
     await navigate({ to: redirectTo });
   }
 
