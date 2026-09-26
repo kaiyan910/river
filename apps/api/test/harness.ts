@@ -89,11 +89,19 @@ export interface TestApp {
   close(): Promise<void>;
 }
 
+export interface TestAppOptions {
+  /**
+   * Temporal 測試環境：預設是 time skipping（可以快轉 durable timer）；
+   * time skipping 的測試 server 不支援 Temporal Schedule，排程發起的測試改用 local（Temporal CLI 的 dev server，沒有快轉）。
+   */
+  temporal?: 'time-skipping' | 'local';
+}
+
 /**
  * Seam ①：真實的 Postgres（Testcontainers，每個測試檔一個獨立 database）、真實的 Garage（附件）、
  * Temporal TestWorkflowEnvironment（time skipping）與真實的 worker，外加完整的 Nest app。
  */
-export async function startTestApp(): Promise<TestApp> {
+export async function startTestApp(options: TestAppOptions = {}): Promise<TestApp> {
   const { url: databaseUrl, drop: dropDatabase } = await createIsolatedDatabase(
     inject('postgresUrl'),
   );
@@ -103,7 +111,13 @@ export async function startTestApp(): Promise<TestApp> {
   const emails = new RecordingEmailSender();
   // api 加密、worker 解密 Credential 用同一把金鑰；每個測試檔各自產生。
   const credentialCipher = createCredentialCipher(randomBytes(32).toString('base64'));
-  const temporal = await TestWorkflowEnvironment.createTimeSkipping();
+  const temporal =
+    options.temporal === 'local'
+      ? // dev server 的 log 只會干擾測試輸出（關閉時還會印出一串 shard 錯誤），全部關掉。
+        await TestWorkflowEnvironment.createLocal({
+          server: { log: { format: 'pretty', level: 'never' } },
+        })
+      : await TestWorkflowEnvironment.createTimeSkipping();
   const worker = await createWorker({
     connection: temporal.nativeConnection,
     namespace: temporal.namespace ?? 'default',

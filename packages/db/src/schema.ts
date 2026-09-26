@@ -143,6 +143,26 @@ export const processes = pgTable('processes', {
 });
 
 /**
+ * 排程發起：每個 Process 最多一個排程，時間到時以 initiator 為發起人、Process 的目前版本發起 Request。
+ * 設定在 Process 上而不在 Process Version 裡，改了立刻生效；對應的 Temporal Schedule 和這一列一起建立、更新、刪除。
+ */
+export const processSchedules = pgTable('process_schedules', {
+  processId: uuid('process_id')
+    .primaryKey()
+    .references(() => processes.id),
+  /** 五個欄位的 cron（分 時 日 月 星期），以 timezone 解讀。 */
+  cron: text('cron').notNull(),
+  timezone: text('timezone').notNull(),
+  initiatorId: uuid('initiator_id')
+    .notNull()
+    .references(() => participants.id),
+  updatedBy: uuid('updated_by')
+    .notNull()
+    .references(() => participants.id),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
+/**
  * Initiator Role：只有這些 Role 的成員可以發起這個 Process；一個 Process 沒有任何一列時，所有 Participant 都可以發起。
  * 設定在 Process 上而不在 Process Version 裡，改了立刻生效，不需要重新發佈。
  */

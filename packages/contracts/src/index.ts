@@ -214,6 +214,17 @@ export const processDraftSchema = z.object({
 });
 export type ProcessDraft = z.infer<typeof processDraftSchema>;
 
+/**
+ * 排程發起：時間到時以 initiator 為發起人、Process 的目前版本發起一筆 Request。
+ * cron 以 timezone（台灣時間）解讀；initiator 已停用時跳過那一次發起，並通知 Administrator。
+ */
+export const processScheduleSchema = z.object({
+  cron: z.string(),
+  timezone: z.string(),
+  initiator: actorSchema.extend({ deactivated: z.boolean() }),
+});
+export type ProcessSchedule = z.infer<typeof processScheduleSchema>;
+
 /** `GET /api/processes/:id`；`POST /api/processes/:id/draft`（從目前版本建立新草稿）也回傳它。draft 為 null 代表目前版本之後沒有改動。 */
 export const processSchema = z.object({
   id: z.string(),
@@ -227,6 +238,8 @@ export const processSchema = z.object({
   initiatorRoles: z.array(actorSchema),
   /** 這些 Role 的成員可以查看這個 Process 的所有 Request。 */
   observerRoles: z.array(actorSchema),
+  /** 沒有設定排程時為 null。 */
+  schedule: processScheduleSchema.nullable(),
 });
 export type Process = z.infer<typeof processSchema>;
 
@@ -262,6 +275,24 @@ export const processAccessSchema = z.object({
   observerRoleIds: z.array(z.uuid()).max(100),
 });
 export type ProcessAccessInput = z.infer<typeof processAccessSchema>;
+
+/**
+ * `PUT /api/processes/:id/schedule`：設定或修改排程。和 Initiator Role 一樣設定在 Process 上，立刻生效。
+ * cron 是標準的五個欄位（分 時 日 月 星期），例如每月 1 號早上 9 點是 `0 9 1 * *`；
+ * 這裡只檢查格式，數值範圍由 Temporal 檢查（不合法時回 422）。
+ */
+export const setProcessScheduleSchema = z.object({
+  cron: z
+    .string()
+    .trim()
+    .regex(
+      /^[\d*,/\-A-Za-z?#LW]+(\s+[\d*,/\-A-Za-z?#LW]+){4}$/,
+      'cron 必須是五個欄位：分 時 日 月 星期',
+    )
+    .transform((cron) => cron.split(/\s+/).join(' ')),
+  initiatorId: z.uuid(),
+});
+export type SetProcessScheduleInput = z.infer<typeof setProcessScheduleSchema>;
 
 /** 草稿沒有通過發佈前檢查時，發佈回 422 與這個內容；errors 與前端即時檢查的結果相同。 */
 export const publishRejectedSchema = z.object({

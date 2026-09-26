@@ -63,3 +63,22 @@ export const RETRY_SIGNAL = 'retry';
 export interface RetrySignal {
   sequence: number;
 }
+
+/**
+ * 排程發起：Process 的 Temporal Schedule 每次時間到就啟動這個 workflow。
+ * 它以排程上指定的 Participant 為發起人、Process 的目前版本建立 Request，再以 child workflow 啟動 interpreter。
+ * 輸入只有 Process ID；發起人、cron 都在 Postgres，修改設定不需要改 Schedule 的輸入。
+ */
+export const SCHEDULED_START_WORKFLOW = 'scheduledStart';
+
+export interface ScheduledStartInput {
+  processId: string;
+}
+
+/** 每個 Process 最多一個排程；Temporal Schedule 的 ID 由 Process ID 決定。 */
+export function scheduleIdOf(processId: string): string {
+  return `process-schedule-${processId}`;
+}
+
+/** 排程的 cron 一律以這個時區解讀（和 Form 的日期同一個時區）。 */
+export const SCHEDULE_TIME_ZONE = 'Asia/Taipei';

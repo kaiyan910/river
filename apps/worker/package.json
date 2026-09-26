@@ -26,6 +26,7 @@
     "@river/db": "workspace:*",
     "@river/dsl": "workspace:*",
     "@river/email": "workspace:*",
+    "@river/forms": "workspace:*",
     "@river/logger": "workspace:*",
     "@temporalio/activity": "^1.24.0",
     "@temporalio/worker": "^1.24.0",

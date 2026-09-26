@@ -8,3 +8,4 @@ export {
   taskCompletedSignal,
   withdrawSignal,
 } from './interpret-process.js';
+export { scheduledStart } from './scheduled-start.js';

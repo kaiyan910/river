@@ -167,5 +167,6 @@ Worker 是一般的 Node.js 程式，不使用 NestJS。Temporal 的 workflow sa
 - **測試分層**：
   - `packages/dsl` 與 `packages/forms`：Vitest 純單元測試。
   - worker：`TestWorkflowEnvironment`（time skipping）測試 Reminder / Escalation，再加上 replay 測試。
+  - 排程發起：time skipping 的測試 server 不支援 Temporal Schedule，改用 `TestWorkflowEnvironment.createLocal()`（Temporal CLI 的 dev server，第一次執行會下載 CLI），以 `ScheduleHandle.trigger()` 觸發。
   - api：Vitest 搭配真實的 Postgres（Testcontainers）。
   - 端對端：Playwright 走過「發起 → 審批 → Return → 重送 → 完成」的完整流程。

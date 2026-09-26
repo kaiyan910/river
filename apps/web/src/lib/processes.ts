@@ -6,6 +6,7 @@ import {
   processSchema,
   processVersionSchema,
   publishRejectedSchema,
+  type SetProcessScheduleInput,
 } from '@river/contracts';
 import type { Branch, ProcessDsl } from '@river/dsl';
 import { queryOptions, useMutation, useQueryClient } from '@tanstack/react-query';
@@ -79,6 +80,25 @@ export function useSetProcessAccess() {
       await updated(process);
       await queryClient.invalidateQueries({ queryKey: ['processes', 'startable'] });
     },
+  });
+}
+
+/** 設定或修改排程發起；立刻生效，對應的 Temporal Schedule 由 API 同步更新。 */
+export function useSetProcessSchedule() {
+  const updated = useProcessUpdated();
+  return useMutation({
+    mutationFn: ({ id, ...schedule }: SetProcessScheduleInput & { id: string }) =>
+      api(`/processes/${id}/schedule`, { method: 'PUT', body: schedule, schema: processSchema }),
+    onSuccess: updated,
+  });
+}
+
+export function useRemoveProcessSchedule() {
+  const updated = useProcessUpdated();
+  return useMutation({
+    mutationFn: (id: string) =>
+      api(`/processes/${id}/schedule`, { method: 'DELETE', schema: processSchema }),
+    onSuccess: updated,
   });
 }
 

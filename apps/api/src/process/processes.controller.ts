@@ -27,6 +27,7 @@ import {
   publishRejectedSchema,
   type StartableProcess,
   saveDraftSchema,
+  setProcessScheduleSchema,
   startableProcessListSchema,
 } from '@river/contracts';
 import { createZodDto } from 'nestjs-zod';
@@ -36,6 +37,7 @@ import {
   RequireParticipant,
   RequirePermission,
 } from '../auth/require-permission.js';
+import { ProcessScheduleService } from './process-schedule.service.js';
 import { ProcessesService } from './processes.service.js';
 
 class ProcessDto extends createZodDto(processSchema) {}
@@ -47,13 +49,17 @@ class ProcessVersionDto extends createZodDto(processVersionSchema) {}
 class PublishRejectedDto extends createZodDto(publishRejectedSchema) {}
 class StartableProcessListDto extends createZodDto(startableProcessListSchema) {}
 class ProcessAccessDto extends createZodDto(processAccessSchema) {}
+class SetProcessScheduleDto extends createZodDto(setProcessScheduleSchema) {}
 
 const Id = () => Param('id', new ParseUUIDPipe());
 
 /** 查看給編輯與發佈的人；編輯草稿需要 process.edit，發佈需要 process.publish。 */
 @Controller('processes')
 export class ProcessesController {
-  constructor(private readonly processes: ProcessesService) {}
+  constructor(
+    private readonly processes: ProcessesService,
+    private readonly schedules: ProcessScheduleService,
+  ) {}
 
   @Get()
   @RequirePermission('process.edit', 'process.publish')
@@ -128,6 +134,31 @@ export class ProcessesController {
   @ApiUnprocessableEntityResponse({ description: '有 Role 不存在' })
   setAccess(@Id() id: string, @Body() body: ProcessAccessDto): Promise<ProcessDto> {
     return this.processes.setAccess(id, body);
+  }
+
+  /** 排程發起：和 Initiator Role 一樣設定在 Process 上、立刻生效，所以需要 process.publish。 */
+  @Put(':id/schedule')
+  @RequirePermission('process.publish')
+  @ApiOkResponse({ type: ProcessDto })
+  @ApiConflictResponse({ description: '還沒發佈過的 Process 不能設定排程' })
+  @ApiUnprocessableEntityResponse({
+    description: 'cron 不合法，或發起人無效、不能發起這個 Process',
+  })
+  async setSchedule(
+    @Id() id: string,
+    @Body() body: SetProcessScheduleDto,
+    @CurrentParticipant() me: ActiveParticipant,
+  ): Promise<ProcessDto> {
+    await this.schedules.set(id, body, me);
+    return this.processes.get(id);
+  }
+
+  @Delete(':id/schedule')
+  @RequirePermission('process.publish')
+  @ApiOkResponse({ type: ProcessDto })
+  async removeSchedule(@Id() id: string): Promise<ProcessDto> {
+    await this.schedules.remove(id);
+    return this.processes.get(id);
   }
 
   @Post(':id/versions')

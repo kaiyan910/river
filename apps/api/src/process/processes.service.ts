@@ -9,6 +9,7 @@ import type {
   AssigneeRef,
   Process,
   ProcessAccessInput,
+  ProcessSchedule,
   ProcessStep,
   ProcessSummary,
   ProcessVersion,
@@ -23,6 +24,7 @@ import {
   processes,
   processInitiatorRoles,
   processObserverRoles,
+  processSchedules,
   processVersions,
   roles,
 } from '@river/db';
@@ -116,6 +118,7 @@ export class ProcessesService {
 
     const versions = await this.versions(id);
     const access = await this.access(id);
+    const schedule = await readSchedule(this.db, id);
     const draft =
       row.draft && row.draftSavedAt && row.draftSavedById
         ? {
@@ -131,6 +134,7 @@ export class ProcessesService {
       currentVersion: versions.at(-1)?.version ?? null,
       versions,
       ...access,
+      schedule,
     };
   }
 
@@ -462,4 +466,29 @@ export function stepsOf(dsl: ProcessDsl, names: Names): ProcessStep[] {
       },
     ];
   });
+}
+
+/** Process 的排程；沒有設定時為 null。發起人停用後設定仍然保留，畫面上標示出來。 */
+export async function readSchedule(
+  db: Pick<Database, 'select'>,
+  processId: string,
+): Promise<ProcessSchedule | null> {
+  const [row] = await db
+    .select({
+      cron: processSchedules.cron,
+      timezone: processSchedules.timezone,
+      initiatorId: processSchedules.initiatorId,
+      initiatorName: authUsers.name,
+      deactivatedAt: participants.deactivatedAt,
+    })
+    .from(processSchedules)
+    .innerJoin(participants, eq(participants.id, processSchedules.initiatorId))
+    .innerJoin(authUsers, eq(authUsers.id, participants.userId))
+    .where(eq(processSchedules.processId, processId));
+  if (!row) return null;
+  return {
+    cron: row.cron,
+    timezone: row.timezone,
+    initiator: { id: row.initiatorId, name: row.initiatorName, deactivated: !!row.deactivatedAt },
+  };
 }

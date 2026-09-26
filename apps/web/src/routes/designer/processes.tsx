@@ -25,6 +25,7 @@ import {
   AlarmClock,
   ArrowDown,
   ArrowUp,
+  CalendarClock,
   CircleAlert,
   CircleCheck,
   FileText,
@@ -73,6 +74,7 @@ import {
   sameDsl,
   useProcessCanvas,
 } from './process-canvas';
+import { ScheduleDialog, scheduleSummary } from './schedule-dialog';
 
 type ProcessStatus = 'unpublished' | 'published' | 'published-with-draft';
 
@@ -269,6 +271,7 @@ function ProcessEditor({ process, me }: { process: Process; me: MeResponse }) {
   const [problemsOpen, setProblemsOpen] = useState(true);
   const [publishing, setPublishing] = useState(false);
   const [editingAccess, setEditingAccess] = useState(false);
+  const [editingSchedule, setEditingSchedule] = useState(false);
   const rf = useReactFlow();
   const canvasRef = useRef<HTMLDivElement>(null);
   const save = useSaveDraft();
@@ -407,6 +410,24 @@ function ProcessEditor({ process, me }: { process: Process; me: MeResponse }) {
           <Users size={13} aria-hidden className="shrink-0" />
           <span className="truncate">{accessSummary(process)}</span>
         </button>
+        {(current || process.schedule) && (
+          <button
+            type="button"
+            onClick={() => setEditingSchedule(true)}
+            title="排程發起"
+            className={cn(
+              'flex max-w-60 cursor-pointer items-center gap-1 truncate rounded-md px-2 py-1 text-[0.85em] text-muted-foreground hover:bg-muted',
+              process.schedule?.initiator.deactivated && 'text-destructive',
+            )}
+          >
+            <CalendarClock size={13} aria-hidden className="shrink-0" />
+            <span className="truncate">
+              {process.schedule?.initiator.deactivated
+                ? '排程的發起人已停用'
+                : (scheduleSummary(process) ?? '設定排程')}
+            </span>
+          </button>
+        )}
         <div className="flex-1" />
         {tab === 'draft' && needsDraft && current && (
           <Button size="sm" disabled={createDraft.isPending} onClick={startDraft}>
@@ -588,6 +609,13 @@ function ProcessEditor({ process, me }: { process: Process; me: MeResponse }) {
           process={process}
           canEdit={canPublish}
           onClose={() => setEditingAccess(false)}
+        />
+      )}
+      {editingSchedule && (
+        <ScheduleDialog
+          process={process}
+          canEdit={canPublish}
+          onClose={() => setEditingSchedule(false)}
         />
       )}
       {publishing && (

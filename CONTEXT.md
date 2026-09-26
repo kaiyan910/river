@@ -60,6 +60,10 @@ _Avoid_: Starter, allowed users
 Designer 在 Process 上指定的 Role，其成員可以查看該 Process 所有 Request 的內容與歷程。
 _Avoid_: Viewer, watcher
 
+**排程發起**（Scheduled Start）:
+Designer 在 Process 上設定的 cron 排程，必須指定一位 Participant 作為發起人；時間到時以他為發起人、當時的目前 Process Version 自動發起一筆 Request（開始表單為空白）。發起人已停用，或開始表單有必填欄位時，跳過那一次並通知 Administrator。設定在 Process 上，不屬於任何 Process Version。
+_Avoid_: Cron job, 定時任務, 自動申請
+
 **Parallel Branch**（並行分支）:
 Process 裡讓幾個步驟同時進行的一段：從並行分支節點的每一條出邊各走一條分支，每一條都走到配對的並行匯合節點後，Request 才繼續往下走。任一條分支被 Return 時，其他分支上的 Task 一併作廢。
 _Avoid_: Fork, 會簽, 用「並行分支」稱呼其中單獨一條分支（稱「分支」）
