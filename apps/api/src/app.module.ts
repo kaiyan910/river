@@ -69,7 +69,8 @@ export class AppModule {
               `${req.method} ${requestUrl(req)} ${res.statusCode} ${error.message}`,
           },
         }),
-        AuthModule.forRoot({ auth: deps.auth }),
+        // CSV 匯入整份檔案放在 JSON body 裡，預設的 100kb 不夠。
+        AuthModule.forRoot({ auth: deps.auth, bodyParser: { json: { limit: '2mb' } } }),
         OrgModule,
         ProcessModule,
         RequestModule,

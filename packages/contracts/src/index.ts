@@ -56,6 +56,58 @@ export type UpdateParticipantInput = z.infer<typeof updateParticipantSchema>;
 export const setPermissionsSchema = z.object({ permissions: permissionList });
 export type SetPermissionsInput = z.infer<typeof setPermissionsSchema>;
 
+/** `POST /api/participants/import`：以 CSV 一次匯入多位 Participant 與他們的 Manager。 */
+export const importParticipantsSchema = z.object({
+  /** CSV 檔的完整內容。第一行是標題列，需要姓名、email、Manager 的 email 三個欄位。 */
+  csv: z.string().min(1).max(1_000_000),
+});
+export type ImportParticipantsInput = z.infer<typeof importParticipantsSchema>;
+
+/**
+ * CSV 匯入某一行失敗的原因。
+ * invalid_format：格式錯誤（欄位數、姓名、email、引號）；duplicate_email：檔案裡有其他行用了同一個 email；
+ * email_taken：這個 email 已經有帳號；manager_not_found：Manager 不在檔案裡，也不是現有的 Participant；
+ * manager_deactivated：Manager 已停用；manager_cycle：Manager 關係形成循環；
+ * manager_failed：Manager 在檔案裡，但那一行沒有匯入；create_failed：建立帳號時發生錯誤。
+ */
+export const IMPORT_FAILURE_CODES = [
+  'invalid_format',
+  'duplicate_email',
+  'email_taken',
+  'manager_not_found',
+  'manager_deactivated',
+  'manager_cycle',
+  'manager_failed',
+  'create_failed',
+] as const;
+export type ImportFailureCode = (typeof IMPORT_FAILURE_CODES)[number];
+
+export const importParticipantsResultSchema = z.object({
+  imported: z.array(
+    z.object({
+      /** CSV 的行號（從 1 起算，標題列是第 1 行）。 */
+      line: z.number().int(),
+      participantId: z.string(),
+      name: z.string(),
+      email: z.email(),
+      managerId: z.string().nullable(),
+      /** 邀請信寄送失敗時為 false，帳號仍然建立，之後可以重寄。 */
+      invitationSent: z.boolean(),
+    }),
+  ),
+  failed: z.array(
+    z.object({
+      line: z.number().int(),
+      /** 格式錯誤、讀不出 email 時為 null。 */
+      email: z.string().nullable(),
+      code: z.enum(IMPORT_FAILURE_CODES),
+      /** 給 Administrator 看的原因說明。 */
+      message: z.string(),
+    }),
+  ),
+});
+export type ImportParticipantsResult = z.infer<typeof importParticipantsResultSchema>;
+
 // ─── 邀請 ────────────────────────────────────────────────────────────────
 
 /** 邀請連結的有效時間；信件內容與設定密碼頁的說明都以它為準。 */

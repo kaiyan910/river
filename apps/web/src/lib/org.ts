@@ -2,6 +2,7 @@ import type { Permission } from '@river/auth';
 import {
   type CreateParticipantInput,
   directorySchema,
+  importParticipantsResultSchema,
   invitationSchema,
   type Participant,
   participantListSchema,
@@ -59,6 +60,20 @@ export function useCreateParticipant() {
   return useMutation({
     mutationFn: (input: CreateParticipantInput) =>
       api('/participants', { method: 'POST', body: input, schema: participantSchema }),
+    onSettled: () => queryClient.invalidateQueries({ queryKey: participantsQueryOptions.queryKey }),
+  });
+}
+
+/** CSV 匯入：回傳成功匯入的人與失敗的行（行號與原因）。 */
+export function useImportParticipants() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (csv: string) =>
+      api('/participants/import', {
+        method: 'POST',
+        body: { csv },
+        schema: importParticipantsResultSchema,
+      }),
     onSettled: () => queryClient.invalidateQueries({ queryKey: participantsQueryOptions.queryKey }),
   });
 }

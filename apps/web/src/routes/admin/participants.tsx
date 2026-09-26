@@ -14,6 +14,7 @@ import {
   RotateCcw,
   Search,
   Send,
+  Upload,
   UserPlus,
   Users,
   UserX,
@@ -43,13 +44,15 @@ import {
 } from '@/lib/permissions';
 import { requestNumber } from '@/lib/requests';
 import { cn } from '@/lib/utils';
+import { ImportParticipants } from '@/routes/admin/participant-import';
 
 type StatusFilter = 'all' | ParticipantStatus;
 const FILTERS: StatusFilter[] = ['all', 'active', 'invited', 'deactivated'];
 
 export const NEW_PARTICIPANT = 'new';
+export const IMPORT_PARTICIPANTS = 'import';
 
-/** 人員頁：左欄清單、右欄詳情或新增表單（A「清單 + 詳情」）。`selected` 是 Participant id 或 `new`。 */
+/** 人員頁：左欄清單、右欄詳情或新增表單（A「清單 + 詳情」）。`selected` 是 Participant id、`new` 或 `import`。 */
 export function ParticipantsPage({
   me,
   selected,
@@ -79,9 +82,14 @@ export function ParticipantsPage({
       <section className="flex min-h-0 flex-col border-border bg-card md:border-r">
         <div className="flex items-center justify-between gap-2 p-3">
           <h1 className="font-semibold text-[1.15em]">人員</h1>
-          <Button size="sm" onClick={() => onSelect(NEW_PARTICIPANT)}>
-            <Plus size={14} aria-hidden /> 新增
-          </Button>
+          <div className="flex gap-1.5">
+            <Button size="sm" variant="outline" onClick={() => onSelect(IMPORT_PARTICIPANTS)}>
+              <Upload size={14} aria-hidden /> 匯入 CSV
+            </Button>
+            <Button size="sm" onClick={() => onSelect(NEW_PARTICIPANT)}>
+              <Plus size={14} aria-hidden /> 新增
+            </Button>
+          </div>
         </div>
         <div className="relative mx-3 mb-2">
           <Search
@@ -164,6 +172,8 @@ export function ParticipantsPage({
       <section className="min-w-0 overflow-auto">
         {selected === NEW_PARTICIPANT ? (
           <CreateParticipant me={me} people={all} onOpen={onSelect} />
+        ) : selected === IMPORT_PARTICIPANTS ? (
+          <ImportParticipants onOpen={onSelect} />
         ) : current ? (
           <ParticipantDetail key={current.id} participant={current} people={all} me={me} />
         ) : (
@@ -173,7 +183,7 @@ export function ParticipantsPage({
             </div>
             <h2 className="font-semibold text-[1.3em]">選擇一位 Participant</h2>
             <p className="max-w-[36em] text-muted-foreground">
-              在這裡設定 Manager 與 Permission，或按「新增」邀請新同仁。
+              在這裡設定 Manager 與 Permission，或按「新增」邀請新同仁、按「匯入 CSV」一次匯入多人。
             </p>
           </div>
         )}

@@ -16,6 +16,9 @@ import {
   type DirectoryEntry,
   deactivationImpactSchema,
   directorySchema,
+  type ImportParticipantsResult,
+  importParticipantsResultSchema,
+  importParticipantsSchema,
   participantListSchema,
   participantSchema,
   setPermissionsSchema,
@@ -25,6 +28,7 @@ import { createZodDto } from 'nestjs-zod';
 import type { ActiveParticipant } from '../auth/active-participant.js';
 import { CurrentParticipant, RequirePermission } from '../auth/require-permission.js';
 import { DeactivationService } from './deactivation.service.js';
+import { ParticipantImportService } from './participant-import.service.js';
 import { ParticipantsService } from './participants.service.js';
 
 class ParticipantDto extends createZodDto(participantSchema) {}
@@ -34,6 +38,8 @@ class CreateParticipantDto extends createZodDto(createParticipantSchema) {}
 class UpdateParticipantDto extends createZodDto(updateParticipantSchema) {}
 class SetPermissionsDto extends createZodDto(setPermissionsSchema) {}
 class DeactivationImpactDto extends createZodDto(deactivationImpactSchema) {}
+class ImportParticipantsDto extends createZodDto(importParticipantsSchema) {}
+class ImportParticipantsResultDto extends createZodDto(importParticipantsResultSchema) {}
 
 const Id = () => Param('id', new ParseUUIDPipe());
 
@@ -42,6 +48,7 @@ export class ParticipantsController {
   constructor(
     private readonly participants: ParticipantsService,
     private readonly deactivation: DeactivationService,
+    private readonly importer: ParticipantImportService,
   ) {}
 
   /** 持有 role.manage 的人也需要人員清單來挑選 Role 成員。 */
@@ -74,6 +81,21 @@ export class ParticipantsController {
     @CurrentParticipant() me: ActiveParticipant,
   ): Promise<ParticipantDto> {
     return this.participants.create(body, me);
+  }
+
+  /**
+   * 以 CSV 匯入 Participant 與 Manager：有錯誤的行不匯入並列出行號與原因，其他行照常匯入並寄出邀請信。
+   * 標題列缺少必要欄位時回 400，不匯入任何人。
+   */
+  @Post('import')
+  @HttpCode(200)
+  @RequirePermission('user.manage')
+  @ApiOkResponse({ type: ImportParticipantsResultDto })
+  import(
+    @Body() body: ImportParticipantsDto,
+    @CurrentParticipant() me: ActiveParticipant,
+  ): Promise<ImportParticipantsResult> {
+    return this.importer.import(body.csv, me);
   }
 
   @Patch(':id')
