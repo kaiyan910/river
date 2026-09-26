@@ -1,13 +1,14 @@
 import {
   type FormRejected,
   formRejectedSchema,
+  type MyTasksStatus,
   myTaskListSchema,
   type RequestDetail,
   type RequestSummary,
+  type ResubmitRequestInput,
   requestDetailSchema,
   requestSummaryListSchema,
   startableProcessListSchema,
-  type TaskStatus,
 } from '@river/contracts';
 import { queryOptions, useMutation, useQueryClient } from '@tanstack/react-query';
 import { ApiError, api } from '@/lib/api';
@@ -38,7 +39,7 @@ export const requestQueryOptions = (id: string) =>
       query.state.data && isAdvancing(query.state.data) ? POLL_MS : false,
   });
 
-export const myTasksQueryOptions = (status: TaskStatus) =>
+export const myTasksQueryOptions = (status: MyTasksStatus) =>
   queryOptions({
     queryKey: ['tasks', 'mine', status],
     queryFn: () => api(`/tasks/mine?status=${status}`, { schema: myTaskListSchema }),
@@ -66,10 +67,10 @@ export function useStartRequest() {
 }
 
 type CompleteTask =
-  | { id: string; version: number; outcome: 'approved'; comment: string }
+  | { id: string; version: number; outcome: 'approved' | 'returned'; comment: string }
   | { id: string; version: number; outcome: 'submitted'; data: Record<string, unknown> };
 
-/** 核准審批 Task，或送出填表 Task 的 Form 資料。 */
+/** 核准或 Return 審批 Task，或送出填表 Task 的 Form 資料。Return 一定要有意見。 */
 export function useCompleteTask() {
   const changed = useRequestChanged();
   const queryClient = useQueryClient();
@@ -78,13 +79,13 @@ export function useCompleteTask() {
       api(`/tasks/${task.id}/complete`, {
         method: 'POST',
         body:
-          task.outcome === 'approved'
-            ? {
-                outcome: 'approved',
+          task.outcome === 'submitted'
+            ? { outcome: 'submitted', version: task.version, data: task.data }
+            : {
+                outcome: task.outcome,
                 version: task.version,
                 comment: task.comment.trim() || undefined,
-              }
-            : { outcome: 'submitted', version: task.version, data: task.data },
+              },
         schema: requestDetailSchema,
       }),
     onSuccess: changed,
@@ -95,6 +96,35 @@ export function useCompleteTask() {
         queryClient.invalidateQueries({ queryKey: ['tasks', 'mine'] }),
       ]),
   });
+}
+
+/** 修改被 Return 的 Request 後重新送出。 */
+export function useResubmitRequest(id: string) {
+  const changed = useRequestChanged();
+  return useMutation({
+    mutationFn: (input: ResubmitRequestInput) =>
+      api(`/requests/${id}/resubmit`, { method: 'POST', body: input, schema: requestDetailSchema }),
+    onSuccess: changed,
+  });
+}
+
+/** Request 完成之前撤回。 */
+export function useWithdrawRequest(id: string) {
+  const changed = useRequestChanged();
+  return useMutation({
+    mutationFn: (comment: string) =>
+      api(`/requests/${id}/withdraw`, {
+        method: 'POST',
+        body: { comment: comment.trim() || undefined },
+        schema: requestDetailSchema,
+      }),
+    onSuccess: changed,
+  });
+}
+
+/** 發起人還能 Withdraw 的狀態。 */
+export function isWithdrawable(r: Pick<RequestSummary, 'status'>): boolean {
+  return r.status === 'running' || r.status === 'returned';
 }
 
 /** Form 資料沒通過 API 驗證（422）時各欄位的錯誤；其他錯誤回傳 null。 */

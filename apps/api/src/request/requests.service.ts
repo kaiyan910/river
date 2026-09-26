@@ -1,13 +1,27 @@
-import { Inject, Injectable, NotFoundException } from '@nestjs/common';
-import type { RequestDetail, RequestSummary, StartRequestInput } from '@river/contracts';
-import { INTERPRET_PROCESS_WORKFLOW, type InterpretProcessInput } from '@river/contracts/workflow';
-import { type Database, requestEvents, requests } from '@river/db';
-import { Client } from '@temporalio/client';
+import { ConflictException, Inject, Injectable, NotFoundException } from '@nestjs/common';
+import type {
+  RequestDetail,
+  RequestSummary,
+  ResubmitRequestInput,
+  StartRequestInput,
+  WithdrawRequestInput,
+} from '@river/contracts';
+import {
+  INTERPRET_PROCESS_WORKFLOW,
+  type InterpretProcessInput,
+  RESUBMITTED_SIGNAL,
+  type ResubmittedSignal,
+  WITHDRAW_SIGNAL,
+} from '@river/contracts/workflow';
+import { type Database, processVersions, requestEvents, requests } from '@river/db';
+import { Client, WorkflowNotFoundError } from '@temporalio/client';
+import { and, eq, inArray, sql } from 'drizzle-orm';
 import type { ActiveParticipant } from '../auth/active-participant.js';
 import { currentVersions, startFormOf } from '../process/processes.service.js';
 import { DATABASE, TEMPORAL_CLIENT, TEMPORAL_TASK_QUEUE } from '../tokens.js';
 import { saveStepData, validateStepData } from './form-data.js';
 import { RequestReads } from './request-reads.js';
+import { supersedeOpenTasks } from './supersede.js';
 
 @Injectable()
 export class RequestsService {
@@ -45,6 +59,7 @@ export class RequestsService {
           requestId: created.id,
           nodeId: startNode.id,
           submittedBy: me.id,
+          round: 1,
         });
 
       const workflowInput: InterpretProcessInput = {
@@ -61,6 +76,89 @@ export class RequestsService {
     return this.detail(requestId, me);
   }
 
+  /**
+   * 發起人修改被 Return 的 Request 後重新送出：以樂觀鎖（status = returned）把 Request 改回 running、
+   * 輪次加 1，新的開始表單資料存成這一輪的一列，先前每一輪的資料都保留。
+   * 提交後才送出 resubmitted Signal，workflow 從 Process 的開頭重新執行，所有審批都要重新進行。
+   */
+  async resubmit(
+    id: string,
+    input: ResubmitRequestInput,
+    me: ActiveParticipant,
+  ): Promise<RequestDetail> {
+    const [request] = await this.db
+      .select({ initiatorId: requests.initiatorId, dsl: processVersions.dsl })
+      .from(requests)
+      .innerJoin(processVersions, eq(processVersions.id, requests.processVersionId))
+      .where(eq(requests.id, id));
+    if (!request || request.initiatorId !== me.id)
+      throw new NotFoundException('找不到這筆 Request');
+    const submission = validateStepData(startFormOf(request.dsl), input.data);
+    const startNode = request.dsl.nodes.find((n) => n.type === 'start');
+
+    const round = await this.db.transaction(async (tx) => {
+      const [resubmitted] = await tx
+        .update(requests)
+        .set({ status: 'running', round: sql`${requests.round} + 1`, title: input.title })
+        .where(and(eq(requests.id, id), eq(requests.status, 'returned')))
+        .returning({ round: requests.round });
+      if (!resubmitted) return undefined;
+      await tx
+        .insert(requestEvents)
+        .values({ requestId: id, type: 'request.resubmitted', actorId: me.id });
+      if (startNode)
+        await saveStepData(tx, submission, {
+          requestId: id,
+          nodeId: startNode.id,
+          submittedBy: me.id,
+          round: resubmitted.round,
+        });
+      return resubmitted.round;
+    });
+    if (round === undefined) return this.explainNotChangeable(id, 'resubmit', me);
+
+    await this.signalResubmitted(id, round);
+    return this.detail(id, me);
+  }
+
+  /**
+   * Request 完成之前（running 或 returned），發起人可以 Withdraw。
+   * 先鎖住並更新 Request，再把 open 的 Task 全部作廢（和 createTask activity 同樣的鎖定順序），
+   * 提交後才送出 withdraw Signal，workflow 收到後結束。
+   */
+  async withdraw(
+    id: string,
+    input: WithdrawRequestInput,
+    me: ActiveParticipant,
+  ): Promise<RequestDetail> {
+    const withdrawn = await this.db.transaction(async (tx) => {
+      const [updated] = await tx
+        .update(requests)
+        .set({ status: 'withdrawn' })
+        .where(
+          and(
+            eq(requests.id, id),
+            eq(requests.initiatorId, me.id),
+            inArray(requests.status, ['running', 'returned']),
+          ),
+        )
+        .returning({ id: requests.id });
+      if (!updated) return false;
+      await tx.insert(requestEvents).values({
+        requestId: id,
+        type: 'request.withdrawn',
+        actorId: me.id,
+        comment: input.comment || null,
+      });
+      await supersedeOpenTasks(tx, id);
+      return true;
+    });
+    if (!withdrawn) return this.explainNotChangeable(id, 'withdraw', me);
+
+    await this.signalWithdraw(id);
+    return this.detail(id, me);
+  }
+
   mine(me: ActiveParticipant): Promise<RequestSummary[]> {
     return this.reads.mine(me.id);
   }
@@ -69,5 +167,47 @@ export class RequestsService {
     const detail = await this.reads.detail(id, me.id);
     if (!detail) throw new NotFoundException('找不到這筆 Request');
     return detail;
+  }
+
+  /**
+   * 重新送出或 Withdraw 沒有更新到 Request 時，說明原因。
+   * 狀態顯示上一次其實已經成功（例如 Signal 送出失敗後重試），就再送一次 Signal：workflow 端冪等。
+   */
+  private async explainNotChangeable(
+    id: string,
+    action: 'resubmit' | 'withdraw',
+    me: ActiveParticipant,
+  ): Promise<never> {
+    const [request] = await this.db
+      .select({ status: requests.status, round: requests.round, initiatorId: requests.initiatorId })
+      .from(requests)
+      .where(eq(requests.id, id));
+    if (!request || request.initiatorId !== me.id)
+      throw new NotFoundException('找不到這筆 Request');
+    if (action === 'resubmit' && request.status === 'running' && request.round > 1)
+      await this.signalResubmitted(id, request.round);
+    if (action === 'withdraw' && request.status === 'withdrawn') await this.signalWithdraw(id);
+    const verb = action === 'resubmit' ? '重新送出' : 'Withdraw';
+    const reasons: Record<typeof request.status, string> = {
+      running: '這筆 Request 正在進行中，不需要重新送出。',
+      returned: '這筆 Request 已被 Return，請先修改後重新送出。',
+      completed: `這筆 Request 已經完成，不能${verb}。`,
+      withdrawn: '這筆 Request 已經撤回。',
+    };
+    throw new ConflictException(reasons[request.status]);
+  }
+
+  private async signalResubmitted(id: string, round: number): Promise<void> {
+    const signal: ResubmittedSignal = { round };
+    await this.temporal.workflow.getHandle(id).signal(RESUBMITTED_SIGNAL, signal);
+  }
+
+  /** workflow 已經結束時（例如重送 Signal）不需要再通知它。 */
+  private async signalWithdraw(id: string): Promise<void> {
+    try {
+      await this.temporal.workflow.getHandle(id).signal(WITHDRAW_SIGNAL);
+    } catch (error) {
+      if (!(error instanceof WorkflowNotFoundError)) throw error;
+    }
   }
 }

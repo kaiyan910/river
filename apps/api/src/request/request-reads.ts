@@ -1,11 +1,11 @@
 import { Inject, Injectable } from '@nestjs/common';
 import type {
   MyTask,
+  MyTasksStatus,
   RequestDetail,
   RequestEvent,
   RequestSummary,
   RequestTask,
-  TaskStatus,
 } from '@river/contracts';
 import {
   type Database,
@@ -37,7 +37,7 @@ export class RequestReads {
     return this.summaries(eq(requests.initiatorId, initiatorId));
   }
 
-  async myTasks(assigneeId: string, status: TaskStatus): Promise<MyTask[]> {
+  async myTasks(assigneeId: string, status: MyTasksStatus): Promise<MyTask[]> {
     const rows = await this.db
       .select()
       .from(tasks)
@@ -61,7 +61,8 @@ export class RequestReads {
 
   /**
    * 發起人與經手的審批人、填表人看得到；其他人（包括不存在的 Request）回 undefined。
-   * 看得到的人也看得到每一步填寫的 Form 資料（唯讀）。
+   * 看得到的人也看得到每一步填寫的 Form 資料（唯讀）；只顯示目前這一輪的資料，
+   * Task 與時間軸則保留每一輪的紀錄。
    */
   async detail(requestId: string, viewerId: string): Promise<RequestDetail | undefined> {
     const [summary] = await this.summaries(eq(requests.id, requestId));
@@ -76,11 +77,12 @@ export class RequestReads {
       taskRows.some((t) => t.assigneeId === viewerId || t.completedBy === viewerId);
     if (!involved) return undefined;
 
-    const [version] = await this.db
-      .select({ dsl: processVersions.dsl })
+    const [current] = await this.db
+      .select({ dsl: processVersions.dsl, round: requests.round })
       .from(requests)
       .innerJoin(processVersions, eq(processVersions.id, requests.processVersionId))
       .where(eq(requests.id, requestId));
+    const round = current?.round ?? 1;
     const eventRows = await this.db
       .select()
       .from(requestEvents)
@@ -89,10 +91,10 @@ export class RequestReads {
     const dataRows = await this.db
       .select()
       .from(requestData)
-      .where(eq(requestData.requestId, requestId))
+      .where(and(eq(requestData.requestId, requestId), eq(requestData.round, round)))
       .orderBy(asc(requestData.submittedAt));
 
-    const dsl = version?.dsl ?? { nodes: [], edges: [], forms: [] };
+    const dsl = current?.dsl ?? { nodes: [], edges: [], forms: [] };
     const names = await participantNames(this.db, [
       ...taskRows.flatMap(taskPeople),
       ...eventRows.flatMap((e) => (e.actorId ? [e.actorId] : [])),
@@ -122,6 +124,7 @@ export class RequestReads {
     });
     return {
       ...summary,
+      round,
       steps: stepsOf(dsl, names),
       forms: dsl.forms.filter((f) => usedForms.has(f.id)),
       data: dataRows.map((d) => ({
@@ -177,9 +180,19 @@ export class RequestReads {
         ),
       )
       .orderBy(asc(tasks.createdAt));
+    // 被 Return 的 Request：最後一個 Return 的 Task 帶著意見。
+    const returnedIds = rows.filter((r) => r.status === 'returned').map((r) => r.id);
+    const returnedTasks = returnedIds.length
+      ? await this.db
+          .select()
+          .from(tasks)
+          .where(and(inArray(tasks.requestId, returnedIds), eq(tasks.outcome, 'returned')))
+          .orderBy(desc(tasks.completedAt))
+      : [];
     const names = await participantNames(this.db, [
       ...rows.map((r) => r.initiatorId),
       ...open.map((t) => t.assigneeId),
+      ...returnedTasks.flatMap(taskPeople),
     ]);
     return rows.map((r) => ({
       id: r.id,
@@ -191,10 +204,24 @@ export class RequestReads {
       openTasks: open
         .filter((t) => t.requestId === r.id)
         .map((t) => ({ id: t.id, nodeName: t.nodeName, assignee: actor(names, t.assigneeId) })),
+      returned: returnedOf(
+        returnedTasks.find((t) => t.requestId === r.id),
+        names,
+      ),
       createdAt: iso(r.createdAt),
       updatedAt: iso(r.updatedAt ?? r.createdAt),
     }));
   }
+}
+
+function returnedOf(t: TaskRow | undefined, names: Names): RequestSummary['returned'] {
+  if (!t?.completedBy || !t.completedAt) return null;
+  return {
+    by: actor(names, t.completedBy),
+    nodeName: t.nodeName,
+    comment: t.comment ?? '',
+    at: iso(t.completedAt),
+  };
 }
 
 function taskPeople(t: TaskRow): string[] {
@@ -214,6 +241,7 @@ function toTask(t: TaskRow, names: Names): RequestTask {
     completedBy: t.completedBy ? actor(names, t.completedBy) : null,
     completedAt: t.completedAt ? iso(t.completedAt) : null,
     version: t.version,
+    round: t.round,
     createdAt: iso(t.createdAt),
   };
 }

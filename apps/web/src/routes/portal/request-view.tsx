@@ -1,5 +1,15 @@
 import type { RequestDetail, RequestEvent, RequestSummary } from '@river/contracts';
-import { Check, CheckCircle2, Circle, FileText, Loader2, Search } from 'lucide-react';
+import {
+  Check,
+  CheckCircle2,
+  Circle,
+  FileText,
+  Loader2,
+  RotateCcw,
+  Search,
+  Undo2,
+  XCircle,
+} from 'lucide-react';
 import type { ReactNode } from 'react';
 import { FormDataView } from '@/components/form-fields';
 import { Avatar } from '@/components/people';
@@ -121,19 +131,39 @@ export function Card({ title, children }: { title: string; children: ReactNode }
   );
 }
 
-/** 進行中：目前步驟與處理人；workflow 往下一步走的空檔顯示「處理中」。 */
+const FINAL_STATUS = {
+  completed: { label: '已完成', dot: 'bg-status-approved' },
+  withdrawn: { label: '已撤回', dot: 'bg-status-closed' },
+} as const;
+
+/**
+ * 進行中：目前步驟與處理人；workflow 往下一步走的空檔顯示「處理中」。
+ * 已退回：withStep 時帶上 Return 的意見。
+ */
 export function RequestStatus({
   request,
   withStep,
 }: {
-  request: Pick<RequestSummary, 'status' | 'openTasks'>;
+  request: Pick<RequestSummary, 'status' | 'openTasks' | 'returned'>;
   withStep?: boolean;
 }) {
-  if (request.status === 'completed')
+  if (request.status === 'completed' || request.status === 'withdrawn') {
+    const { label, dot } = FINAL_STATUS[request.status];
     return (
       <span className="inline-flex items-center gap-1.5 whitespace-nowrap text-[0.86em] text-muted-foreground">
-        <span className="size-[7px] rounded-full bg-status-approved" />
-        已完成
+        <span className={cn('size-[7px] rounded-full', dot)} />
+        {label}
+      </span>
+    );
+  }
+  if (request.status === 'returned')
+    return (
+      <span className="inline-flex min-w-0 items-center gap-1.5 text-[0.86em] text-status-returned">
+        <span className="size-[7px] shrink-0 rounded-full bg-status-returned" />
+        <span className="truncate">
+          已退回
+          {withStep && request.returned?.comment && ` · ${request.returned.comment}`}
+        </span>
       </span>
     );
   const step = request.openTasks[0];
@@ -208,18 +238,29 @@ export function RequestContent({ request }: { request: RequestDetail }) {
   );
 }
 
-type StepState = 'done' | 'current' | 'advancing' | 'todo';
+type StepState = 'done' | 'current' | 'advancing' | 'returned' | 'todo';
 
-/** 每一步的狀態：已完成、目前（有 open Task）、處理中（workflow 正在走到這一步）、還沒到。 */
+/**
+ * 每一步在目前這一輪的狀態：已完成、目前（有 open Task）、處理中（workflow 正在走到這一步）、還沒到。
+ * 被 Return 的那一步標成 returned；重新送出後先前的核准都失效，所以只看這一輪的 Task。
+ */
 function stepStates(request: RequestDetail): StepState[] {
   let previousDone = true;
+  const tasks = request.tasks.filter((t) => t.round === request.round);
   return request.steps.map((step) => {
     let state: StepState;
     if (step.type === 'start') state = 'done';
     else if (step.type === 'end') state = request.status === 'completed' ? 'done' : 'todo';
     else {
-      const task = request.tasks.findLast((t) => t.nodeId === step.nodeId);
-      state = task?.status === 'open' ? 'current' : task ? 'done' : 'todo';
+      const task = tasks.findLast((t) => t.nodeId === step.nodeId);
+      state =
+        task?.status === 'open'
+          ? 'current'
+          : task?.outcome === 'returned'
+            ? 'returned'
+            : task?.status === 'completed'
+              ? 'done'
+              : 'todo';
     }
     if (state === 'todo' && previousDone && isAdvancing(request)) state = 'advancing';
     previousDone = state === 'done';
@@ -231,12 +272,14 @@ const STEP_TONE: Record<StepState, string> = {
   done: 'border-status-approved bg-status-approved text-white',
   current: 'border-status-open bg-status-open text-white',
   advancing: 'border-status-open bg-card text-status-open',
+  returned: 'border-status-returned bg-status-returned text-white',
   todo: 'border-border bg-card text-muted-foreground',
 };
 
 function StepIcon({ state }: { state: StepState }) {
   if (state === 'done') return <Check size={13} strokeWidth={2.5} />;
   if (state === 'advancing') return <Loader2 size={13} className="animate-spin" />;
+  if (state === 'returned') return <Undo2 size={13} strokeWidth={2.5} />;
   return <Circle size={8} fill={state === 'current' ? 'currentColor' : 'none'} />;
 }
 
@@ -294,10 +337,30 @@ function describeEvent(e: RequestEvent): string {
       return e.task?.kind === 'form'
         ? `${e.actor?.name} 在「${e.task?.nodeName}」送出表單`
         : `${e.actor?.name} 在「${e.task?.nodeName}」核准`;
+    case 'task.returned':
+      return `${e.actor?.name} 在「${e.task?.nodeName}」Return，退回給發起人修改`;
+    case 'task.superseded':
+      return `「${e.task?.nodeName}」的 Task 已作廢`;
+    case 'request.resubmitted':
+      return `${e.actor?.name} 修改後重新送出，從頭開始審批`;
+    case 'request.withdrawn':
+      return `${e.actor?.name} 撤回申請`;
     case 'request.completed':
       return '申請完成';
   }
 }
+
+/** 沒有 actor 的系統事件用小圓點；完成、撤回用圖示。 */
+function SystemEventIcon({ type }: { type: RequestEvent['type'] }) {
+  if (type === 'request.completed') return <CheckCircle2 size={14} aria-hidden />;
+  if (type === 'task.superseded') return <XCircle size={14} aria-hidden />;
+  return <span className="size-1.5 rounded-full bg-current" />;
+}
+
+const EVENT_TONE: Partial<Record<RequestEvent['type'], string>> = {
+  'task.returned': 'text-status-returned',
+  'request.resubmitted': 'text-status-open',
+};
 
 /** 時間軸：逐列顯示 request_events。 */
 export function Timeline({ request }: { request: RequestDetail }) {
@@ -315,17 +378,21 @@ export function Timeline({ request }: { request: RequestDetail }) {
                   e.type === 'request.completed' && 'border-status-approved text-status-approved',
                 )}
               >
-                {e.type === 'request.completed' ? (
-                  <CheckCircle2 size={14} aria-hidden />
-                ) : (
-                  <span className="size-1.5 rounded-full bg-current" />
-                )}
+                <SystemEventIcon type={e.type} />
               </span>
             )}
           </span>
           <div className="min-w-0 flex-1">
             <div className="flex flex-wrap items-baseline justify-between gap-x-3">
-              <span className={cn(e.actor ? 'font-medium' : 'text-muted-foreground')}>
+              <span
+                className={cn(
+                  e.actor ? 'font-medium' : 'text-muted-foreground',
+                  EVENT_TONE[e.type],
+                )}
+              >
+                {e.type === 'request.resubmitted' && (
+                  <RotateCcw size={13} aria-hidden className="mr-1 inline align-[-1px]" />
+                )}
                 {describeEvent(e)}
               </span>
               <time dateTime={e.at} className="font-mono text-[0.8em] text-muted-foreground">

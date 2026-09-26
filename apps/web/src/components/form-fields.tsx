@@ -18,6 +18,22 @@ export function emptyValues(form: FormSchema): Record<string, FieldValue> {
   return Object.fromEntries(form.fields.map((f) => [f.key, emptyValue(f)]));
 }
 
+/** 把存下來的資料（正規化後的值）轉回畫面上的欄位值，例如修改後重新送出時預先填好。 */
+export function valuesFrom(
+  form: FormSchema,
+  data: Record<string, unknown>,
+): Record<string, FieldValue> {
+  return Object.fromEntries(
+    form.fields.map((f) => {
+      const v = data[f.key];
+      if (f.type === 'multiselect')
+        return [f.key, Array.isArray(v) ? v.filter((x) => typeof x === 'string') : []];
+      if (f.type === 'checkbox') return [f.key, v === true];
+      return [f.key, typeof v === 'string' || typeof v === 'number' ? String(v) : ''];
+    }),
+  );
+}
+
 const textareaClass =
   'min-h-[4.5em] w-full resize-y rounded-lg border border-input bg-card px-[0.8em] py-[0.55em] placeholder:text-muted-foreground/80 focus:border-ring focus:shadow-[0_0_0_3px_color-mix(in_oklch,var(--ring)_28%,transparent)] focus:outline-none aria-invalid:border-destructive';
 
@@ -172,9 +188,12 @@ export function FormRunner({
   onSubmit,
   onInvalid,
   actions,
+  initial,
 }: {
   form: FormSchema | null;
   withTitle?: { placeholder: string };
+  /** 預先填好的標題與資料（存下來的值）；沒有時從空白開始。 */
+  initial?: { title: string; data: Record<string, unknown> };
   submitLabel: string;
   pending?: boolean;
   /** API 回 422 時各欄位的錯誤（鍵是欄位代碼）。 */
@@ -193,7 +212,10 @@ export function FormRunner({
   // formToZod 接受任何輸入（畫面上的字串也可以），這裡只是讓 TanStack Form 知道輸入就是表單值。
   const validator = schema as unknown as z.ZodType<unknown, FormValues>;
   const f = useForm({
-    defaultValues: { title: '', data: form ? emptyValues(form) : {} } as FormValues,
+    defaultValues: {
+      title: initial?.title ?? '',
+      data: form ? (initial ? valuesFrom(form, initial.data) : emptyValues(form)) : {},
+    } as FormValues,
     validators: { onBlur: validator, onSubmit: validator },
     // 欄位 blur 時只更新那個欄位的錯誤；送出時一定要跑一次完整驗證，把所有欄位的錯誤都標出來。
     // 驗證不過時 onSubmit 仍然不會被呼叫。

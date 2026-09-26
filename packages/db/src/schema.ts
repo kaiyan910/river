@@ -147,7 +147,8 @@ export const processVersions = pgTable(
 
 // ─── Request 與 Task ──────────────────────────────────────────────────────
 
-export const REQUEST_STATUSES = ['running', 'completed'] as const;
+/** returned：被 Return，等待發起人重新送出；completed、withdrawn 是最終狀態。 */
+export const REQUEST_STATUSES = ['running', 'returned', 'completed', 'withdrawn'] as const;
 export type RequestStatus = (typeof REQUEST_STATUSES)[number];
 
 /** 一筆 Request 對應一個 Temporal workflow，workflow ID 等於 Request ID。發起時鎖定 Process Version。 */
@@ -165,15 +166,18 @@ export const requests = pgTable(
       .references(() => participants.id),
     title: text('title').notNull(),
     status: text('status').$type<RequestStatus>().notNull().default('running'),
+    /** 第幾輪：發起時是 1，每次 Return 後重新送出加 1。Task 與 Form 資料都記下自己屬於哪一輪。 */
+    round: integer('round').notNull().default(1),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [index().on(t.initiatorId)],
 );
 
-export const TASK_STATUSES = ['open', 'completed'] as const;
+/** superseded：因為 Return 或 Withdraw 而作廢，不再需要處理。 */
+export const TASK_STATUSES = ['open', 'completed', 'superseded'] as const;
 export type TaskStatus = (typeof TASK_STATUSES)[number];
-/** 審批 Task 的結果是 approved；填表 Task 送出後是 submitted。 */
-export type TaskOutcome = 'approved' | 'submitted';
+/** 審批 Task 的結果是 approved 或 returned；填表 Task 送出後是 submitted。 */
+export type TaskOutcome = 'approved' | 'returned' | 'submitted';
 /** 對應產生 Task 的節點類型。 */
 export const TASK_KINDS = ['approval', 'form'] as const;
 export type TaskKind = (typeof TASK_KINDS)[number];
@@ -192,6 +196,8 @@ export const tasks = pgTable(
     nodeId: text('node_id').notNull(),
     nodeName: text('node_name').notNull(),
     kind: text('kind').$type<TaskKind>().notNull().default('approval'),
+    /** 建立時 Request 的第幾輪。 */
+    round: integer('round').notNull().default(1),
     assigneeId: uuid('assignee_id')
       .notNull()
       .references(() => participants.id),
@@ -210,6 +216,10 @@ export const REQUEST_EVENT_TYPES = [
   'request.started',
   'task.created',
   'task.completed',
+  'task.returned',
+  'task.superseded',
+  'request.resubmitted',
+  'request.withdrawn',
   'request.completed',
 ] as const;
 export type RequestEventType = (typeof REQUEST_EVENT_TYPES)[number];
@@ -246,11 +256,13 @@ export const requestData = pgTable(
     nodeId: text('node_id').notNull(),
     /** 填寫時用的 Form（Process Version 快照裡的 id）。 */
     formId: text('form_id').notNull(),
+    /** 填寫時 Request 的第幾輪；重新送出後先前每一輪的資料都保留。 */
+    round: integer('round').notNull().default(1),
     data: jsonb('data').$type<Record<string, unknown>>().notNull(),
     submittedBy: uuid('submitted_by')
       .notNull()
       .references(() => participants.id),
     submittedAt: timestamp('submitted_at', { withTimezone: true }).notNull().defaultNow(),
   },
-  (t) => [unique().on(t.requestId, t.nodeId)],
+  (t) => [unique().on(t.requestId, t.nodeId, t.round)],
 );

@@ -14,7 +14,9 @@ import {
   type RequestSummary,
   requestDetailSchema,
   requestSummaryListSchema,
+  resubmitRequestSchema,
   startRequestSchema,
+  withdrawRequestSchema,
 } from '@river/contracts';
 import { createZodDto } from 'nestjs-zod';
 import type { ActiveParticipant } from '../auth/active-participant.js';
@@ -28,10 +30,12 @@ class RequestSummaryListDto extends createZodDto(requestSummaryListSchema) {}
 class MyTaskListDto extends createZodDto(myTaskListSchema) {}
 class MyTasksQueryDto extends createZodDto(myTasksQuerySchema) {}
 class CompleteTaskDto extends createZodDto(completeTaskSchema) {}
+class ResubmitRequestDto extends createZodDto(resubmitRequestSchema) {}
+class WithdrawRequestDto extends createZodDto(withdrawRequestSchema) {}
 
 const Id = () => Param('id', new ParseUUIDPipe());
 
-/** 入口網站的 Request：發起、「我的申請」、明細與時間軸。 */
+/** 入口網站的 Request：發起、「我的申請」、明細與時間軸、重新送出與 Withdraw。 */
 @Controller('requests')
 export class RequestsController {
   constructor(private readonly requests: RequestsService) {}
@@ -60,6 +64,36 @@ export class RequestsController {
   @ApiOkResponse({ type: RequestDetailDto })
   detail(@Id() id: string, @CurrentParticipant() me: ActiveParticipant): Promise<RequestDetail> {
     return this.requests.detail(id, me);
+  }
+
+  /** 發起人修改被 Return 的 Request 後重新送出；從 Process 的開頭重新開始。 */
+  @Post(':id/resubmit')
+  @HttpCode(200)
+  @RequireParticipant()
+  @ApiOkResponse({ type: RequestDetailDto })
+  @ApiNotFoundResponse({ description: 'Request 不存在或不是你發起的' })
+  @ApiConflictResponse({ description: 'Request 不在 returned 狀態' })
+  resubmit(
+    @Id() id: string,
+    @Body() body: ResubmitRequestDto,
+    @CurrentParticipant() me: ActiveParticipant,
+  ): Promise<RequestDetail> {
+    return this.requests.resubmit(id, body, me);
+  }
+
+  /** 發起人在 Request 完成之前撤回；open 的 Task 全部作廢。 */
+  @Post(':id/withdraw')
+  @HttpCode(200)
+  @RequireParticipant()
+  @ApiOkResponse({ type: RequestDetailDto })
+  @ApiNotFoundResponse({ description: 'Request 不存在或不是你發起的' })
+  @ApiConflictResponse({ description: 'Request 已經完成或已經撤回' })
+  withdraw(
+    @Id() id: string,
+    @Body() body: WithdrawRequestDto,
+    @CurrentParticipant() me: ActiveParticipant,
+  ): Promise<RequestDetail> {
+    return this.requests.withdraw(id, body, me);
   }
 }
 

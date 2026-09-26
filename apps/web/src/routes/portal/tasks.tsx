@@ -1,6 +1,6 @@
-import type { RequestDetail, RequestTask, TaskStatus } from '@river/contracts';
+import type { MyTasksStatus, RequestDetail, RequestTask } from '@river/contracts';
 import { useQuery } from '@tanstack/react-query';
-import { CheckCircle2, Inbox } from 'lucide-react';
+import { CheckCircle2, Inbox, Undo2, XCircle } from 'lucide-react';
 import { useRef, useState } from 'react';
 import { FormRunner } from '@/components/form-fields';
 import { Avatar } from '@/components/people';
@@ -36,7 +36,7 @@ export function TasksPage({
   selected: string | undefined;
   onSelect: (id: string | undefined) => void;
 }) {
-  const [tab, setTab] = useState<TaskStatus>('open');
+  const [tab, setTab] = useState<MyTasksStatus>('open');
   const [query, setQuery] = useState('');
   const open = useQuery(myTasksQueryOptions('open'));
   const done = useQuery(myTasksQueryOptions('completed'));
@@ -147,15 +147,7 @@ function TaskDetail({ taskId, requestId }: { taskId: string; requestId: string }
           <ApprovePanel task={task} title={r.title} complete={complete} />
         )
       ) : (
-        <section className="flex items-start gap-2 rounded-xl border bg-muted/60 p-4">
-          <CheckCircle2 size={18} aria-hidden className="mt-0.5 shrink-0 text-status-approved" />
-          <span role={complete.isError ? 'alert' : undefined}>
-            {complete.isError && `${complete.error.message} `}
-            {task.completedBy?.name} 已於 {task.completedAt && formatTime(task.completedAt)}{' '}
-            {task.kind === 'form' ? '送出表單' : '核准'}
-            {task.comment ? `：「${task.comment}」` : '。'}
-          </span>
-        </section>
+        <ClosedTask task={task} request={r} error={complete.isError ? complete.error : null} />
       )}
       <Card title="進度">
         <Progress request={r} />
@@ -164,6 +156,54 @@ function TaskDetail({ taskId, requestId }: { taskId: string; requestId: string }
         <Timeline request={r} />
       </Card>
     </div>
+  );
+}
+
+const OUTCOME_TEXT = { approved: '核准', returned: 'Return', submitted: '送出表單' } as const;
+
+/** 已經處理或作廢的 Task；已由別人處理時，先帶上剛才送出失敗的原因。 */
+function ClosedTask({
+  task,
+  request,
+  error,
+}: {
+  task: RequestTask;
+  request: RequestDetail;
+  error: Error | null;
+}) {
+  const superseded = task.status === 'superseded';
+  const Icon = superseded ? XCircle : task.outcome === 'returned' ? Undo2 : CheckCircle2;
+  return (
+    <section className="flex items-start gap-2 rounded-xl border bg-muted/60 p-4">
+      <Icon
+        size={18}
+        aria-hidden
+        className={cn(
+          'mt-0.5 shrink-0',
+          superseded
+            ? 'text-status-closed'
+            : task.outcome === 'returned'
+              ? 'text-status-returned'
+              : 'text-status-approved',
+        )}
+      />
+      <span role={error ? 'alert' : undefined}>
+        {error && `${error.message} `}
+        {superseded ? (
+          request.status === 'withdrawn' ? (
+            '發起人已撤回這筆申請，這個 Task 已作廢，不需要再處理。'
+          ) : (
+            '這個 Task 已作廢，不需要再處理。'
+          )
+        ) : (
+          <>
+            {task.completedBy?.name} 已於 {task.completedAt && formatTime(task.completedAt)}{' '}
+            {task.outcome && OUTCOME_TEXT[task.outcome]}
+            {task.comment ? `：「${task.comment}」` : '。'}
+          </>
+        )}
+      </span>
+    </section>
   );
 }
 
@@ -228,33 +268,53 @@ function ApprovePanel({
   complete: ReturnType<typeof useCompleteTask>;
 }) {
   const [comment, setComment] = useState('');
+  // Return 一定要填意見：按下 Return 時意見空白就提示，不送出。
+  const [needComment, setNeedComment] = useState(false);
+  const decide = (outcome: 'approved' | 'returned') => {
+    if (outcome === 'returned' && !comment.trim()) {
+      setNeedComment(true);
+      return;
+    }
+    complete.mutate(
+      { id: task.id, version: task.version, outcome, comment },
+      {
+        onSuccess: () =>
+          toast(outcome === 'approved' ? `已核准「${title}」` : `已退回「${title}」給發起人`),
+      },
+    );
+  };
 
   return (
     <section className="grid gap-3 rounded-xl border-2 border-primary/40 bg-accent/40 p-4">
       <YourTurn task={task} />
       <textarea
         value={comment}
-        onChange={(e) => setComment(e.target.value)}
+        onChange={(e) => {
+          setComment(e.target.value);
+          if (e.target.value.trim()) setNeedComment(false);
+        }}
         maxLength={2000}
         aria-label="意見"
-        placeholder="意見（選填），會顯示在時間軸上"
-        className="min-h-[4.5em] w-full resize-y rounded-lg border border-input bg-card px-[0.8em] py-[0.55em] placeholder:text-muted-foreground/80 focus:border-ring focus:shadow-[0_0_0_3px_color-mix(in_oklch,var(--ring)_28%,transparent)] focus:outline-none"
+        aria-invalid={needComment || undefined}
+        aria-describedby={needComment ? 'return-comment-error' : undefined}
+        placeholder="意見，會顯示在時間軸上（核准時選填，Return 時必填）"
+        className="min-h-[4.5em] w-full resize-y rounded-lg border border-input bg-card px-[0.8em] py-[0.55em] placeholder:text-muted-foreground/80 focus:border-ring focus:shadow-[0_0_0_3px_color-mix(in_oklch,var(--ring)_28%,transparent)] focus:outline-none aria-invalid:border-destructive"
       />
+      {needComment && (
+        <p id="return-comment-error" className="text-[0.85em] text-destructive">
+          Return 時請填寫意見，讓發起人知道要修改什麼。
+        </p>
+      )}
       {complete.isError && (
         <p role="alert" className="rounded-lg bg-destructive/10 px-3 py-2 text-destructive">
           {complete.error.message}
         </p>
       )}
-      <div className="flex justify-end">
-        <Button
-          disabled={complete.isPending}
-          onClick={() =>
-            complete.mutate(
-              { id: task.id, version: task.version, outcome: 'approved', comment },
-              { onSuccess: () => toast(`已核准「${title}」`) },
-            )
-          }
-        >
+      <div className="flex justify-end gap-2">
+        <Button variant="outline" disabled={complete.isPending} onClick={() => decide('returned')}>
+          <Undo2 size={15} aria-hidden /> Return
+        </Button>
+        <Button disabled={complete.isPending} onClick={() => decide('approved')}>
           {complete.isPending ? '送出中…' : '核准'}
         </Button>
       </div>

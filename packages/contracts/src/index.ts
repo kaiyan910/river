@@ -196,10 +196,12 @@ export const startableProcessListSchema = z.array(startableProcessSchema);
 
 // ─── Request 與 Task ─────────────────────────────────────────────────────
 
-export const requestStatusSchema = z.enum(['running', 'completed']);
+/** returned：被 Return，等待發起人修改後重新送出；completed、withdrawn 是最終狀態。 */
+export const requestStatusSchema = z.enum(['running', 'returned', 'completed', 'withdrawn']);
 export type RequestStatus = z.infer<typeof requestStatusSchema>;
 
-export const taskStatusSchema = z.enum(['open', 'completed']);
+/** superseded：因為 Return 或 Withdraw 而作廢，不再需要處理。 */
+export const taskStatusSchema = z.enum(['open', 'completed', 'superseded']);
 export type TaskStatus = z.infer<typeof taskStatusSchema>;
 
 /** Form 資料：鍵是欄位代碼。內容由 API 依 Process Version 裡的 Form schema 驗證。 */
@@ -242,6 +244,15 @@ export const requestSummarySchema = z.object({
   initiator: actorSchema,
   /** running 卻沒有 open Task 時，代表 workflow 正在往下一步走（畫面顯示「處理中」）。 */
   openTasks: z.array(pendingTaskSchema),
+  /** status 是 returned 時：誰在哪一步 Return、意見是什麼；其他狀態為 null。 */
+  returned: z
+    .object({
+      by: actorSchema,
+      nodeName: z.string(),
+      comment: z.string(),
+      at: z.iso.datetime(),
+    })
+    .nullable(),
   createdAt: z.iso.datetime(),
   /** 最後一筆 request_event 的時間。 */
   updatedAt: z.iso.datetime(),
@@ -260,13 +271,15 @@ export const requestTaskSchema = z.object({
   kind: taskKindSchema,
   assignee: actorSchema,
   status: taskStatusSchema,
-  /** 審批 Task 核准後是 approved，填表 Task 送出後是 submitted。 */
-  outcome: z.enum(['approved', 'submitted']).nullable(),
+  /** 審批 Task 核准後是 approved、Return 後是 returned；填表 Task 送出後是 submitted。 */
+  outcome: z.enum(['approved', 'returned', 'submitted']).nullable(),
   comment: z.string().nullable(),
   completedBy: actorSchema.nullable(),
   completedAt: z.iso.datetime().nullable(),
   /** 樂觀鎖版本號；完成 Task 時要帶上看到的版本。 */
   version: z.number().int().positive(),
+  /** 建立時 Request 的第幾輪。 */
+  round: z.number().int().positive(),
   createdAt: z.iso.datetime(),
 });
 export type RequestTask = z.infer<typeof requestTaskSchema>;
@@ -275,6 +288,10 @@ export const requestEventTypeSchema = z.enum([
   'request.started',
   'task.created',
   'task.completed',
+  'task.returned',
+  'task.superseded',
+  'request.resubmitted',
+  'request.withdrawn',
   'request.completed',
 ]);
 export type RequestEventType = z.infer<typeof requestEventTypeSchema>;
@@ -306,13 +323,15 @@ export type RequestDataSection = z.infer<typeof requestDataSectionSchema>;
 
 /** `GET /api/requests/:id`：發起人與經手的審批人、填表人可以查看。 */
 export const requestDetailSchema = requestSummarySchema.extend({
+  /** 第幾輪：發起時是 1，每次 Return 後重新送出加 1。 */
+  round: z.number().int().positive(),
   /** 發起時鎖定的 Process Version 的流程預覽。 */
   steps: z.array(processStepSchema),
   /** Process Version 裡有節點使用的 Form（顯示資料與填表 Task 用）。 */
   forms: z.array(formSchema),
-  /** 已經填寫的 Form 資料，依填寫順序。 */
+  /** 這一輪已經填寫的 Form 資料，依填寫順序；先前每一輪的資料保留在資料庫，不在這裡顯示。 */
   data: z.array(requestDataSectionSchema),
-  /** 依建立時間排序。 */
+  /** 每一輪的 Task，依建立時間排序。 */
   tasks: z.array(requestTaskSchema),
   /** 依發生順序排序。 */
   events: z.array(requestEventSchema),
@@ -333,18 +352,41 @@ export const myTaskSchema = requestTaskSchema.extend({
 export type MyTask = z.infer<typeof myTaskSchema>;
 export const myTaskListSchema = z.array(myTaskSchema);
 
-export const myTasksQuerySchema = z.object({ status: taskStatusSchema.default('open') });
+/** 作廢（superseded）的 Task 不會出現在「我的待辦」。 */
+export const myTasksQuerySchema = z.object({
+  status: z.enum(['open', 'completed']).default('open'),
+});
+export type MyTasksStatus = z.infer<typeof myTasksQuerySchema>['status'];
 
 /**
- * `POST /api/tasks/:id/complete`：核准審批 Task（approved），或送出填表 Task 的 Form 資料（submitted）。
+ * `POST /api/tasks/:id/complete`：核准或 Return 審批 Task（approved / returned），
+ * 或送出填表 Task 的 Form 資料（submitted）。Return 一定要填意見，讓發起人知道要修改什麼。
  * version 是畫面上看到的 Task 版本（樂觀鎖）。outcome 要和 Task 的類型相符。
  */
-export const completeTaskSchema = z.object({
-  outcome: z.enum(['approved', 'submitted']),
-  version: z.number().int().positive(),
-  comment: z.string().trim().max(2000).optional(),
-  /** 填表 Task 的 Form 資料。 */
-  data: formDataSchema.optional(),
-});
+export const completeTaskSchema = z
+  .object({
+    outcome: z.enum(['approved', 'returned', 'submitted']),
+    version: z.number().int().positive(),
+    comment: z.string().trim().max(2000).optional(),
+    /** 填表 Task 的 Form 資料。 */
+    data: formDataSchema.optional(),
+  })
+  .refine((v) => v.outcome !== 'returned' || !!v.comment, {
+    path: ['comment'],
+    message: 'Return 時必須填寫意見',
+  });
 export type CompleteTaskInput = z.input<typeof completeTaskSchema>;
 export type CompleteTaskCommand = z.output<typeof completeTaskSchema>;
+
+/**
+ * `POST /api/requests/:id/resubmit`：發起人修改被 Return 的 Request 後重新送出。
+ * 內容與發起時相同（標題與開始表單的資料），送出後從 Process 的開頭重新開始。
+ */
+export const resubmitRequestSchema = startRequestSchema.omit({ processId: true });
+export type ResubmitRequestInput = z.infer<typeof resubmitRequestSchema>;
+
+/** `POST /api/requests/:id/withdraw`：發起人在 Request 完成之前撤回；原因選填，會顯示在時間軸。 */
+export const withdrawRequestSchema = z.object({
+  comment: z.string().trim().max(2000).optional(),
+});
+export type WithdrawRequestInput = z.infer<typeof withdrawRequestSchema>;
