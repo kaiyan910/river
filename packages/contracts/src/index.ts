@@ -162,6 +162,10 @@ export const processSchema = z.object({
   currentVersion: z.number().int().positive().nullable(),
   /** 依版本號由小到大。 */
   versions: z.array(processVersionSchema),
+  /** 只有這些 Role 的成員可以發起；空陣列代表所有 Participant 都可以發起。 */
+  initiatorRoles: z.array(actorSchema),
+  /** 這些 Role 的成員可以查看這個 Process 的所有 Request。 */
+  observerRoles: z.array(actorSchema),
 });
 export type Process = z.infer<typeof processSchema>;
 
@@ -187,6 +191,16 @@ export type SaveDraftInput = z.infer<typeof saveDraftSchema>;
 /** `POST /api/processes/:id/versions`：把已儲存的草稿發佈成新的 Process Version。 */
 export const publishProcessSchema = z.object({ note: z.string().trim().max(200).default('') });
 export type PublishProcessInput = z.input<typeof publishProcessSchema>;
+
+/**
+ * `PUT /api/processes/:id/access`：設定 Initiator Role 與 Observer Role（以整份取代）。
+ * 設定在 Process 上，不需要發佈，立刻生效。
+ */
+export const processAccessSchema = z.object({
+  initiatorRoleIds: z.array(z.uuid()).max(100),
+  observerRoleIds: z.array(z.uuid()).max(100),
+});
+export type ProcessAccessInput = z.infer<typeof processAccessSchema>;
 
 /** 草稿沒有通過發佈前檢查時，發佈回 422 與這個內容；errors 與前端即時檢查的結果相同。 */
 export const publishRejectedSchema = z.object({
@@ -295,7 +309,7 @@ const pendingTaskSchema = z.object({
   assignee: assigneeRefSchema,
 });
 
-/** `GET /api/requests/mine` 的一列。 */
+/** `GET /api/requests/mine`、`GET /api/requests` 的一列。 */
 export const requestSummarySchema = z.object({
   id: z.string(),
   /** 給人看的流水號，畫面顯示成 R-000042。 */

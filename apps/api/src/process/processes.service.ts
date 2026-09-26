@@ -8,6 +8,7 @@ import {
 import type {
   AssigneeRef,
   Process,
+  ProcessAccessInput,
   ProcessStep,
   ProcessSummary,
   ProcessVersion,
@@ -20,6 +21,8 @@ import {
   type Database,
   participants,
   processes,
+  processInitiatorRoles,
+  processObserverRoles,
   processVersions,
   roles,
 } from '@river/db';
@@ -35,9 +38,10 @@ import {
   type TaskAssignee,
 } from '@river/dsl';
 import type { FormSchema } from '@river/forms';
-import { asc, desc, eq, inArray, max } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, max } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
 import type { ActiveParticipant } from '../auth/active-participant.js';
+import { startableBy } from '../auth/data-access.js';
 import { DATABASE } from '../tokens.js';
 
 const draftSaver = alias(authUsers, 'draft_saver');
@@ -70,9 +74,17 @@ export class ProcessesService {
     }));
   }
 
-  /** 每個已發佈 Process 的目前版本與步驟預覽；還沒發佈過的 Process 不會出現。 */
-  async startable(): Promise<StartableProcess[]> {
-    const rows = await currentVersions(this.db);
+  /**
+   * 這位 Participant 可以發起的每個 Process 的目前版本與步驟預覽；
+   * 還沒發佈過、或設定了 Initiator Role 而他不是成員的 Process 不會出現。
+   */
+  async startable(me: ActiveParticipant): Promise<StartableProcess[]> {
+    const allowed = await this.db
+      .select({ id: processes.id })
+      .from(processes)
+      .where(startableBy(this.db, me.id));
+    const allowedIds = new Set(allowed.map((p) => p.id));
+    const rows = (await currentVersions(this.db)).filter((r) => allowedIds.has(r.id));
     const names = await lookupNames(
       this.db,
       rows.flatMap((r) => assigneesOf(r.dsl)),
@@ -103,6 +115,7 @@ export class ProcessesService {
     if (!row) throw new NotFoundException('找不到這個 Process');
 
     const versions = await this.versions(id);
+    const access = await this.access(id);
     const draft =
       row.draft && row.draftSavedAt && row.draftSavedById
         ? {
@@ -117,7 +130,34 @@ export class ProcessesService {
       draft,
       currentVersion: versions.at(-1)?.version ?? null,
       versions,
+      ...access,
     };
+  }
+
+  /** 以整份取代 Initiator Role 與 Observer Role；不需要發佈，立刻生效。 */
+  async setAccess(id: string, input: ProcessAccessInput): Promise<Process> {
+    await this.assertExists(id);
+    const initiatorRoleIds = [...new Set(input.initiatorRoleIds)];
+    const observerRoleIds = [...new Set(input.observerRoleIds)];
+    const wanted = [...new Set([...initiatorRoleIds, ...observerRoleIds])];
+    const found = wanted.length
+      ? await this.db.select({ id: roles.id }).from(roles).where(inArray(roles.id, wanted))
+      : [];
+    if (found.length !== wanted.length) throw new UnprocessableEntityException('有 Role 不存在');
+
+    await this.db.transaction(async (tx) => {
+      await tx.delete(processInitiatorRoles).where(eq(processInitiatorRoles.processId, id));
+      await tx.delete(processObserverRoles).where(eq(processObserverRoles.processId, id));
+      if (initiatorRoleIds.length)
+        await tx
+          .insert(processInitiatorRoles)
+          .values(initiatorRoleIds.map((roleId) => ({ processId: id, roleId })));
+      if (observerRoleIds.length)
+        await tx
+          .insert(processObserverRoles)
+          .values(observerRoleIds.map((roleId) => ({ processId: id, roleId })));
+    });
+    return this.get(id);
   }
 
   /** 建立只有「開始」和「結束」的草稿。 */
@@ -243,6 +283,27 @@ export class ProcessesService {
     }));
   }
 
+  /** Initiator Role 與 Observer Role，依 Role 名稱排序。 */
+  private async access(
+    processId: string,
+  ): Promise<Pick<Process, 'initiatorRoles' | 'observerRoles'>> {
+    const [initiatorRoles, observerRoles] = await Promise.all([
+      this.db
+        .select({ id: roles.id, name: roles.name })
+        .from(processInitiatorRoles)
+        .innerJoin(roles, eq(roles.id, processInitiatorRoles.roleId))
+        .where(eq(processInitiatorRoles.processId, processId))
+        .orderBy(asc(roles.name)),
+      this.db
+        .select({ id: roles.id, name: roles.name })
+        .from(processObserverRoles)
+        .innerJoin(roles, eq(roles.id, processObserverRoles.roleId))
+        .where(eq(processObserverRoles.processId, processId))
+        .orderBy(asc(roles.name)),
+    ]);
+    return { initiatorRoles, observerRoles };
+  }
+
   private async assertExists(id: string) {
     const [row] = await this.db
       .select({ id: processes.id })
@@ -259,6 +320,19 @@ async function latestVersion(db: Pick<Database, 'select'>, processId: string): P
     .from(processVersions)
     .where(eq(processVersions.processId, processId));
   return row?.version ?? 0;
+}
+
+/** 這位 Participant 可以發起這個 Process（沒有設定 Initiator Role，或他是其中任一個的成員）。 */
+export async function canStart(
+  db: Pick<Database, 'select'>,
+  processId: string,
+  participantId: string,
+): Promise<boolean> {
+  const [row] = await db
+    .select({ id: processes.id })
+    .from(processes)
+    .where(and(eq(processes.id, processId), startableBy(db, participantId)));
+  return !!row;
 }
 
 /** 每個 Process 的目前版本（版本號最大的 Process Version），依 Process 名稱排序；可以只查一個 Process。 */

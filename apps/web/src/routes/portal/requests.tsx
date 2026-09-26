@@ -7,6 +7,7 @@ import { FormRunner } from '@/components/form-fields';
 import { Avatar } from '@/components/people';
 import { toast } from '@/components/toast';
 import { Button, buttonVariants } from '@/components/ui/button';
+import { meQueryOptions } from '@/lib/me';
 import {
   formRejection,
   isWithdrawable,
@@ -15,6 +16,7 @@ import {
   requestQueryOptions,
   useResubmitRequest,
   useWithdrawRequest,
+  visibleRequestsQueryOptions,
 } from '@/lib/requests';
 import { formatTime, timeAgo } from '@/lib/time';
 import { cn } from '@/lib/utils';
@@ -43,15 +45,36 @@ const TAB_STATUSES: Record<Tab, Status[] | null> = {
 };
 const inTab = (t: Tab, status: Status) => TAB_STATUSES[t]?.includes(status) ?? true;
 
-/** 我的申請：左欄自己發起的 Request，右欄進度與時間軸。 */
+/**
+ * mine：自己發起的 Request（我的申請）；visible：看得到的所有 Request（經手過的、Observer Role 的
+ * Process 的，持有 request.view_all 時是全部）。左欄清單，右欄進度與時間軸。
+ */
+const SCOPES = {
+  mine: {
+    query: myRequestsQueryOptions,
+    label: '我的申請',
+    empty: '你還沒有發起任何申請。',
+    search: '搜尋編號、標題',
+  },
+  visible: {
+    query: visibleRequestsQueryOptions,
+    label: '可查看的 Request',
+    empty: '目前沒有你可以查看的 Request。',
+    search: '搜尋編號、標題、發起人、Process',
+  },
+} as const;
+
 export function RequestsPage({
+  scope,
   selected,
   onSelect,
 }: {
+  scope: keyof typeof SCOPES;
   selected: string | undefined;
   onSelect: (id: string | undefined) => void;
 }) {
-  const requests = useQuery(myRequestsQueryOptions);
+  const config = SCOPES[scope];
+  const requests = useQuery(config.query);
   const [tab, setTab] = useState<Tab>('active');
   const [query, setQuery] = useState('');
   const all = requests.data ?? [];
@@ -61,7 +84,10 @@ export function RequestsPage({
       inTab(tab, r.status) &&
       (!q ||
         r.title.toLowerCase().includes(q) ||
-        requestNumber(r.number).toLowerCase().includes(q)),
+        requestNumber(r.number).toLowerCase().includes(q) ||
+        (scope === 'visible' &&
+          (r.initiator.name.toLowerCase().includes(q) ||
+            r.process.name.toLowerCase().includes(q)))),
   );
   const count = (t: Tab) => all.filter((r) => inTab(t, r.status)).length;
 
@@ -83,12 +109,12 @@ export function RequestsPage({
             <Plus size={14} aria-hidden /> 發起
           </Link>
         </div>
-        <ListSearch value={query} onChange={setQuery} placeholder="搜尋編號、標題" />
-        <ul aria-label="我的申請" className="flex-1 overflow-auto border-t">
+        <ListSearch value={query} onChange={setQuery} placeholder={config.search} />
+        <ul aria-label={config.label} className="flex-1 overflow-auto border-t">
           {requests.isPending && <ListMessage>載入中…</ListMessage>}
           {requests.isError && <ListMessage error>{requests.error.message}</ListMessage>}
           {requests.isSuccess && list.length === 0 && (
-            <ListMessage>{all.length ? '沒有符合的申請。' : '你還沒有發起任何申請。'}</ListMessage>
+            <ListMessage>{all.length ? '沒有符合的申請。' : config.empty}</ListMessage>
           )}
           {list.map((r) => (
             <li key={r.id}>
@@ -107,6 +133,11 @@ export function RequestsPage({
                     {timeAgo(r.updatedAt)}
                   </span>
                 </span>
+                {scope === 'visible' && (
+                  <span className="truncate text-[0.82em] text-muted-foreground">
+                    {r.process.name} · {r.initiator.name}
+                  </span>
+                )}
                 <span className="flex items-center justify-between gap-2">
                   <RequestStatus request={r} withStep />
                   <span className="shrink-0 font-mono text-[0.78em] text-muted-foreground">
@@ -133,20 +164,23 @@ export function RequestsPage({
   );
 }
 
+/** 重新送出與 Withdraw 只給發起人；其他看得到的人（經手人、Observer、request.view_all）唯讀。 */
 function RequestDetailView({ id }: { id: string }) {
   const request = useQuery(requestQueryOptions(id));
+  const me = useQuery(meQueryOptions);
   if (request.isPending) return <p className="px-6 py-8 text-muted-foreground">載入中…</p>;
   if (request.isError) return <p className="px-6 py-8 text-destructive">{request.error.message}</p>;
   const r = request.data;
+  const mine = !!me.data && me.data.id === r.initiator.id;
   return (
     <div className="mx-auto grid max-w-[760px] gap-5 px-6 py-8">
       <RequestHeader request={r} />
-      {r.status === 'returned' && <ResubmitPanel request={r} />}
+      {mine && r.status === 'returned' && <ResubmitPanel request={r} />}
       <Card title="進度">
         <Progress request={r} />
       </Card>
-      {r.status !== 'returned' && <RequestContent request={r} />}
-      {isWithdrawable(r) && <WithdrawPanel request={r} />}
+      {(!mine || r.status !== 'returned') && <RequestContent request={r} />}
+      {mine && isWithdrawable(r) && <WithdrawPanel request={r} />}
       <Card title="時間軸">
         <Timeline request={r} />
       </Card>

@@ -18,6 +18,7 @@ import {
 } from '@nestjs/swagger';
 import {
   type ProcessSummary,
+  processAccessSchema,
   processListSchema,
   processNameSchema,
   processSchema,
@@ -45,6 +46,7 @@ class PublishProcessDto extends createZodDto(publishProcessSchema) {}
 class ProcessVersionDto extends createZodDto(processVersionSchema) {}
 class PublishRejectedDto extends createZodDto(publishRejectedSchema) {}
 class StartableProcessListDto extends createZodDto(startableProcessListSchema) {}
+class ProcessAccessDto extends createZodDto(processAccessSchema) {}
 
 const Id = () => Param('id', new ParseUUIDPipe());
 
@@ -60,12 +62,12 @@ export class ProcessesController {
     return this.processes.list();
   }
 
-  /** 入口網站：任何 Participant 都可以看到已發佈的 Process。之後由 Initiator Role 限制。 */
+  /** 入口網站：自己可以發起的已發佈 Process（沒有設定 Initiator Role，或自己是其成員）。 */
   @Get('startable')
   @RequireParticipant()
   @ApiOkResponse({ type: StartableProcessListDto })
-  startable(): Promise<StartableProcess[]> {
-    return this.processes.startable();
+  startable(@CurrentParticipant() me: ActiveParticipant): Promise<StartableProcess[]> {
+    return this.processes.startable(me);
   }
 
   @Get(':id')
@@ -117,6 +119,15 @@ export class ProcessesController {
   @ApiConflictResponse({ description: '還沒發佈過的 Process 沒有可以回去的版本' })
   discardDraft(@Id() id: string): Promise<void> {
     return this.processes.discardDraft(id);
+  }
+
+  /** Initiator Role 與 Observer Role 不需要發佈就立刻生效，所以和發佈一樣需要 process.publish。 */
+  @Put(':id/access')
+  @RequirePermission('process.publish')
+  @ApiOkResponse({ type: ProcessDto })
+  @ApiUnprocessableEntityResponse({ description: '有 Role 不存在' })
+  setAccess(@Id() id: string, @Body() body: ProcessAccessDto): Promise<ProcessDto> {
+    return this.processes.setAccess(id, body);
   }
 
   @Post(':id/versions')

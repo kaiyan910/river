@@ -1,4 +1,10 @@
-import { ConflictException, Inject, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  ConflictException,
+  ForbiddenException,
+  Inject,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import type {
   RequestDetail,
   RequestSummary,
@@ -17,7 +23,7 @@ import { type Database, processVersions, requestEvents, requests } from '@river/
 import { Client, WorkflowNotFoundError } from '@temporalio/client';
 import { and, eq, inArray, sql } from 'drizzle-orm';
 import type { ActiveParticipant } from '../auth/active-participant.js';
-import { currentVersions, startFormOf } from '../process/processes.service.js';
+import { canStart, currentVersions, startFormOf } from '../process/processes.service.js';
 import { DATABASE, TEMPORAL_CLIENT, TEMPORAL_TASK_QUEUE } from '../tokens.js';
 import { saveStepData, validateStepData } from './form-data.js';
 import { RequestReads } from './request-reads.js';
@@ -34,6 +40,7 @@ export class RequestsService {
 
   /**
    * 以 Process 的目前版本發起 Request，並啟動 workflow ID 等於 Request ID 的 interpreter workflow。
+   * Process 設定了 Initiator Role 時，只有其成員可以發起，其他人回 403。
    * 開始表單的資料先依 Process Version 裡的 Form 驗證，和 Request 一起存進 request_data；
    * workflow 的輸入只有 ID，不帶任何表單資料。
    * workflow 在 transaction 提交前啟動：啟動失敗時 Request 不會留下；
@@ -42,6 +49,8 @@ export class RequestsService {
   async start(input: StartRequestInput, me: ActiveParticipant): Promise<RequestDetail> {
     const [current] = await currentVersions(this.db, input.processId);
     if (!current) throw new NotFoundException('找不到可以發起的 Process');
+    if (!(await canStart(this.db, input.processId, me.id)))
+      throw new ForbiddenException('你不在這個 Process 的 Initiator Role 裡，不能發起');
     const submission = validateStepData(startFormOf(current.dsl), input.data);
     const startNode = current.dsl.nodes.find((n) => n.type === 'start');
 
@@ -163,8 +172,12 @@ export class RequestsService {
     return this.reads.mine(me.id);
   }
 
+  visible(me: ActiveParticipant): Promise<RequestSummary[]> {
+    return this.reads.visible(me);
+  }
+
   async detail(id: string, me: ActiveParticipant): Promise<RequestDetail> {
-    const detail = await this.reads.detail(id, me.id);
+    const detail = await this.reads.detail(id, me);
     if (!detail) throw new NotFoundException('找不到這筆 Request');
     return detail;
   }

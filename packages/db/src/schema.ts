@@ -128,6 +128,37 @@ export const processes = pgTable('processes', {
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
+/**
+ * Initiator Role：只有這些 Role 的成員可以發起這個 Process；一個 Process 沒有任何一列時，所有 Participant 都可以發起。
+ * 設定在 Process 上而不在 Process Version 裡，改了立刻生效，不需要重新發佈。
+ */
+export const processInitiatorRoles = pgTable(
+  'process_initiator_roles',
+  {
+    processId: uuid('process_id')
+      .notNull()
+      .references(() => processes.id),
+    roleId: uuid('role_id')
+      .notNull()
+      .references(() => roles.id),
+  },
+  (t) => [primaryKey({ columns: [t.processId, t.roleId] })],
+);
+
+/** Observer Role：這些 Role 的成員可以查看這個 Process 的所有 Request。和 Initiator Role 一樣立刻生效。 */
+export const processObserverRoles = pgTable(
+  'process_observer_roles',
+  {
+    processId: uuid('process_id')
+      .notNull()
+      .references(() => processes.id),
+    roleId: uuid('role_id')
+      .notNull()
+      .references(() => roles.id),
+  },
+  (t) => [primaryKey({ columns: [t.processId, t.roleId] }), index().on(t.roleId)],
+);
+
 /** 已發佈的 Process Version：只新增、不修改（資料庫 trigger 擋下 UPDATE 與 DELETE）。版本號最大的是目前版本。 */
 export const processVersions = pgTable(
   'process_versions',

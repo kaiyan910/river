@@ -1,5 +1,6 @@
 import type { Permission } from '@river/auth';
 import {
+  Eye,
   FileText,
   House,
   Inbox,
@@ -36,6 +37,12 @@ export const PROCESSES: NavItem = {
 };
 export const MY_TASKS: NavItem = { to: '/tasks', label: '我的待辦', icon: Inbox };
 export const MY_REQUESTS: NavItem = { to: '/requests', label: '我的申請', icon: FileText };
+/** 看得到的所有 Request：經手過的、Observer Role 的 Process 的；持有 request.view_all 時是全部。 */
+export const VISIBLE_REQUESTS: NavItem = {
+  to: '/requests/visible',
+  label: '可查看的 Request',
+  icon: Eye,
+};
 export const ROLES: NavItem = {
   to: '/admin/roles',
   label: 'Role',
@@ -45,7 +52,7 @@ export const ROLES: NavItem = {
 
 /** icon rail 的分組；組與組之間以分隔線隔開。 */
 export const NAV_GROUPS: NavItem[][] = [
-  [HOME, START_REQUEST, MY_TASKS, MY_REQUESTS],
+  [HOME, START_REQUEST, MY_TASKS, MY_REQUESTS, VISIBLE_REQUESTS],
   [PROCESSES],
   [
     PARTICIPANTS,
@@ -70,6 +77,7 @@ const IMPLEMENTED: NavItem[] = [
   START_REQUEST,
   MY_TASKS,
   MY_REQUESTS,
+  VISIBLE_REQUESTS,
   PARTICIPANTS,
   ROLES,
   PROCESSES,

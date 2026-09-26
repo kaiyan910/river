@@ -134,7 +134,7 @@ export class TasksService {
     if (!requestId) await this.explainConflict(taskId, me);
 
     await this.signalCompleted(requestId as string, taskId, input.outcome);
-    const detail = await this.reads.detail(requestId as string, me.id);
+    const detail = await this.reads.detail(requestId as string, me);
     if (!detail) throw new NotFoundException('找不到這筆 Request');
     return detail;
   }

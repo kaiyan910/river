@@ -33,6 +33,13 @@ export const myRequestsQueryOptions = queryOptions({
   refetchInterval: (query) => (query.state.data?.some(isAdvancing) ? POLL_MS : false),
 });
 
+/** 看得到的所有 Request：自己發起的、經手過的、Observer Role 的 Process 的；持有 request.view_all 時是全部。 */
+export const visibleRequestsQueryOptions = queryOptions({
+  queryKey: ['requests', 'visible'],
+  queryFn: () => api('/requests', { schema: requestSummaryListSchema }),
+  refetchInterval: (query) => (query.state.data?.some(isAdvancing) ? POLL_MS : false),
+});
+
 export const requestQueryOptions = (id: string) =>
   queryOptions({
     queryKey: ['requests', id],
@@ -54,6 +61,7 @@ function useRequestChanged() {
     queryClient.setQueryData(requestQueryOptions(detail.id).queryKey, detail);
     await Promise.all([
       queryClient.invalidateQueries({ queryKey: myRequestsQueryOptions.queryKey }),
+      queryClient.invalidateQueries({ queryKey: visibleRequestsQueryOptions.queryKey }),
       queryClient.invalidateQueries({ queryKey: ['tasks', 'mine'] }),
     ]);
   };

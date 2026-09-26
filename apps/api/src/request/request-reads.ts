@@ -18,6 +18,7 @@ import {
 } from '@river/db';
 import { formIdOf, type TaskAssignee } from '@river/dsl';
 import { and, asc, desc, eq, inArray, max, type SQL } from 'drizzle-orm';
+import { type Viewer, visibleTo } from '../auth/data-access.js';
 import {
   assigneeRef,
   assigneesOf,
@@ -41,6 +42,11 @@ export class RequestReads {
   /** 某位 Participant 發起的 Request，新的在前。 */
   mine(initiatorId: string): Promise<RequestSummary[]> {
     return this.summaries(eq(requests.initiatorId, initiatorId));
+  }
+
+  /** 看得到的所有 Request（見 visibleTo），新的在前。 */
+  visible(viewer: Viewer): Promise<RequestSummary[]> {
+    return this.summaries(visibleTo(this.db, viewer));
   }
 
   /**
@@ -74,24 +80,20 @@ export class RequestReads {
   }
 
   /**
-   * 發起人與經手的審批人、填表人（包括指派 Role 的成員）看得到；其他人（包括不存在的 Request）回 undefined。
+   * 看得到這筆 Request 的人（見 visibleTo）才讀得到；其他人（包括不存在的 Request）回 undefined。
    * 看得到的人也看得到每一步填寫的 Form 資料（唯讀）；只顯示目前這一輪的資料，
    * Task 與時間軸則保留每一輪的紀錄。
    */
-  async detail(requestId: string, viewerId: string): Promise<RequestDetail | undefined> {
-    const [summary] = await this.summaries(eq(requests.id, requestId));
+  async detail(requestId: string, viewer: Viewer): Promise<RequestDetail | undefined> {
+    const [summary] = await this.summaries(
+      and(eq(requests.id, requestId), visibleTo(this.db, viewer)),
+    );
     if (!summary) return undefined;
     const taskRows = await this.db
       .select()
       .from(tasks)
       .where(eq(tasks.requestId, requestId))
       .orderBy(asc(tasks.createdAt));
-    if (
-      summary.initiator.id !== viewerId &&
-      !taskRows.some((t) => t.completedBy === viewerId) &&
-      !(await this.isAssignedTo(requestId, viewerId))
-    )
-      return undefined;
 
     const [current] = await this.db
       .select({ dsl: processVersions.dsl, round: requests.round })
@@ -176,15 +178,6 @@ export class RequestReads {
       tasks: taskRows.map((t) => toTask(t, names)),
       events,
     };
-  }
-
-  private async isAssignedTo(requestId: string, participantId: string): Promise<boolean> {
-    const [row] = await this.db
-      .select({ id: tasks.id })
-      .from(tasks)
-      .where(and(eq(tasks.requestId, requestId), assignedTo(this.db, participantId)))
-      .limit(1);
-    return !!row;
   }
 
   private async summaries(where: SQL | undefined): Promise<RequestSummary[]> {

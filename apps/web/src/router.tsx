@@ -183,7 +183,30 @@ const requestsRoute = createRoute({
   component: function Requests() {
     const { id } = requestsRoute.useSearch();
     const navigate = requestsRoute.useNavigate();
-    return <RequestsPage selected={id} onSelect={(next) => navigate({ search: { id: next } })} />;
+    return (
+      <RequestsPage
+        scope="mine"
+        selected={id}
+        onSelect={(next) => navigate({ search: { id: next } })}
+      />
+    );
+  },
+});
+
+const visibleRequestsRoute = createRoute({
+  getParentRoute: () => authenticatedRoute,
+  path: '/requests/visible',
+  validateSearch: selectionSearch,
+  component: function VisibleRequests() {
+    const { id } = visibleRequestsRoute.useSearch();
+    const navigate = visibleRequestsRoute.useNavigate();
+    return (
+      <RequestsPage
+        scope="visible"
+        selected={id}
+        onSelect={(next) => navigate({ search: { id: next } })}
+      />
+    );
   },
 });
 
@@ -210,6 +233,7 @@ const routeTree = rootRoute.addChildren([
     startRoute,
     tasksRoute,
     requestsRoute,
+    visibleRequestsRoute,
     ...placeholderRoutes,
   ]),
 ]);

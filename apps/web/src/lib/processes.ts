@@ -1,5 +1,6 @@
 import {
   type Process,
+  type ProcessAccessInput,
   type PublishRejected,
   processListSchema,
   processSchema,
@@ -64,6 +65,20 @@ export function useSaveDraft() {
     mutationFn: ({ id, dsl }: { id: string; dsl: ProcessDsl }) =>
       api(`/processes/${id}/draft`, { method: 'PUT', body: { dsl }, schema: processSchema }),
     onSuccess: updated,
+  });
+}
+
+/** 設定 Initiator Role 與 Observer Role；立刻生效，入口網站可以發起的 Process 也要重新讀取。 */
+export function useSetProcessAccess() {
+  const updated = useProcessUpdated();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, ...access }: ProcessAccessInput & { id: string }) =>
+      api(`/processes/${id}/access`, { method: 'PUT', body: access, schema: processSchema }),
+    onSuccess: async (process) => {
+      await updated(process);
+      await queryClient.invalidateQueries({ queryKey: ['processes', 'startable'] });
+    },
   });
 }
 

@@ -53,6 +53,7 @@ import {
   useSaveDraft,
 } from '@/lib/processes';
 import { cn } from '@/lib/utils';
+import { AccessDialog, accessSummary } from './access-dialog';
 import { FormSheet, type FormSlot, newForm } from './form-designer';
 import {
   CanvasFormsContext,
@@ -260,6 +261,7 @@ function ProcessEditor({ process, me }: { process: Process; me: MeResponse }) {
   const dirty = !sameDsl(canvas.dsl, base);
   const [problemsOpen, setProblemsOpen] = useState(true);
   const [publishing, setPublishing] = useState(false);
+  const [editingAccess, setEditingAccess] = useState(false);
   const rf = useReactFlow();
   const canvasRef = useRef<HTMLDivElement>(null);
   const save = useSaveDraft();
@@ -389,6 +391,15 @@ function ProcessEditor({ process, me }: { process: Process; me: MeResponse }) {
             </TabButton>
           ))}
         </nav>
+        <button
+          type="button"
+          onClick={() => setEditingAccess(true)}
+          title="Initiator Role 與 Observer Role"
+          className="flex max-w-72 cursor-pointer items-center gap-1 truncate rounded-md px-2 py-1 text-[0.85em] text-muted-foreground hover:bg-muted"
+        >
+          <Users size={13} aria-hidden className="shrink-0" />
+          <span className="truncate">{accessSummary(process)}</span>
+        </button>
         <div className="flex-1" />
         {tab === 'draft' && needsDraft && current && (
           <Button size="sm" disabled={createDraft.isPending} onClick={startDraft}>
@@ -565,6 +576,13 @@ function ProcessEditor({ process, me }: { process: Process; me: MeResponse }) {
         </CanvasFormsContext.Provider>
       )}
 
+      {editingAccess && (
+        <AccessDialog
+          process={process}
+          canEdit={canPublish}
+          onClose={() => setEditingAccess(false)}
+        />
+      )}
       {publishing && (
         <PublishDialog
           process={process}

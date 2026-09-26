@@ -2,6 +2,7 @@ import { Body, Controller, Get, HttpCode, Param, ParseUUIDPipe, Post, Query } fr
 import {
   ApiConflictResponse,
   ApiCreatedResponse,
+  ApiForbiddenResponse,
   ApiNotFoundResponse,
   ApiOkResponse,
 } from '@nestjs/swagger';
@@ -44,11 +45,23 @@ export class RequestsController {
   @RequireParticipant()
   @ApiCreatedResponse({ type: RequestDetailDto })
   @ApiNotFoundResponse({ description: 'Process 不存在或還沒發佈' })
+  @ApiForbiddenResponse({ description: '不在這個 Process 的 Initiator Role 裡' })
   start(
     @Body() body: StartRequestDto,
     @CurrentParticipant() me: ActiveParticipant,
   ): Promise<RequestDetail> {
     return this.requests.start(body, me);
+  }
+
+  /**
+   * 看得到的所有 Request：自己發起的、經手過的、所屬 Role 是 Observer Role 的 Process 的；
+   * 持有 request.view_all 時是全部。
+   */
+  @Get()
+  @RequireParticipant()
+  @ApiOkResponse({ type: RequestSummaryListDto })
+  visible(@CurrentParticipant() me: ActiveParticipant): Promise<RequestSummary[]> {
+    return this.requests.visible(me);
   }
 
   @Get('mine')
@@ -58,7 +71,7 @@ export class RequestsController {
     return this.requests.mine(me);
   }
 
-  /** 發起人與經手的審批人可以查看；其他人回 404。 */
+  /** 看得到的人（同 GET /requests）才能查看；其他人回 404。 */
   @Get(':id')
   @RequireParticipant()
   @ApiOkResponse({ type: RequestDetailDto })
