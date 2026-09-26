@@ -1,5 +1,7 @@
 import {
   type Assignee,
+  type Branch,
+  type CanvasEdgeData,
   type CanvasNodeData,
   checkProcess,
   fromCanvas,
@@ -30,6 +32,7 @@ import {
   CircleStop,
   ClipboardPen,
   FileText,
+  Split,
   UserCheck,
   UserRoundCheck,
   Users,
@@ -40,11 +43,13 @@ import { directoryQueryOptions, roleDirectoryQueryOptions } from '@/lib/org';
 import { cn } from '@/lib/utils';
 
 export type RFNode = Node<CanvasNodeData, NodeType>;
+export type RFEdge = Edge<CanvasEdgeData>;
 
 export const NODE_ICONS = {
   start: CirclePlay,
   form: ClipboardPen,
   approval: UserCheck,
+  condition: Split,
   end: CircleStop,
 } as const;
 
@@ -68,6 +73,8 @@ function newNode(type: NodeType, position: { x: number; y: number }): ProcessNod
       return { ...base, type, name: '新的填表', formId: null, assignee: null };
     case 'start':
       return { ...base, type, formId: null };
+    case 'condition':
+      return { ...base, type, name: '新的條件' };
     case 'end':
       return { ...base, type };
   }
@@ -92,7 +99,7 @@ function canonicalJson(value: unknown): string {
  */
 export function useProcessCanvas(initial: ProcessDsl) {
   const [nodes, setNodes] = useState<RFNode[]>(() => toCanvas(initial).nodes);
-  const [edges, setEdges] = useState<Edge[]>(() => toCanvas(initial).edges);
+  const [edges, setEdges] = useState<RFEdge[]>(() => toCanvas(initial).edges);
   const [forms, setForms] = useState<FormSchema[]>(() => initial.forms);
 
   const dsl = useMemo(() => fromCanvas({ nodes, edges }, forms), [nodes, edges, forms]);
@@ -105,24 +112,70 @@ export function useProcessCanvas(initial: ProcessDsl) {
       })),
     [nodes, errors],
   );
+  /** 條件節點的出邊在線上標出條件；有錯誤的出邊畫成紅色。 */
+  const labeledEdges = useMemo(
+    () =>
+      edges.map((e): RFEdge => {
+        const branch = e.data?.branch;
+        if (!branch) return e;
+        const invalid = errors.some((err) => err.edgeId === e.id);
+        return {
+          ...e,
+          label: branchLabel(branch),
+          labelStyle: invalid ? { fill: 'var(--destructive)' } : undefined,
+          style: invalid ? { stroke: 'var(--destructive)' } : e.style,
+        };
+      }),
+    [edges, errors],
+  );
 
   const onNodesChange = useCallback(
     (changes: NodeChange<RFNode>[]) => setNodes((ns) => applyNodeChanges(changes, ns)),
     [],
   );
   const onEdgesChange = useCallback(
-    (changes: EdgeChange[]) => setEdges((es) => applyEdgeChanges(changes, es)),
+    (changes: EdgeChange<RFEdge>[]) => setEdges((es) => applyEdgeChanges(changes, es)),
     [],
   );
+  // 條件節點的新出邊先帶一個空白的表達式，由屬性面板填寫或改成預設出邊。
   const onConnect = useCallback(
-    (c: Connection) =>
-      setEdges((es) =>
-        c.source === c.target
-          ? es
-          : addEdge({ ...c, id: `edge-${crypto.randomUUID().slice(0, 8)}` }, es),
-      ),
-    [],
+    (c: Connection) => {
+      if (c.source === c.target) return;
+      const fromCondition = nodes.some((n) => n.id === c.source && n.type === 'condition');
+      const edge: RFEdge = {
+        ...c,
+        id: `edge-${crypto.randomUUID().slice(0, 8)}`,
+        ...(fromCondition && { data: { branch: { type: 'expression', expression: '' } } }),
+      };
+      setEdges((es) => addEdge(edge, es));
+    },
+    [nodes],
   );
+
+  const updateBranch = useCallback((edgeId: string, branch: Branch) => {
+    setEdges((es) => {
+      const source = es.find((e) => e.id === edgeId)?.source;
+      return es.map((e) => {
+        if (e.id === edgeId) return { ...e, data: { ...e.data, branch } };
+        // 同一個條件節點只能有一條預設出邊：選了新的預設出邊，原本的改回表達式。
+        if (branch.type === 'default' && e.source === source && e.data?.branch?.type === 'default')
+          return { ...e, data: { ...e.data, branch: { type: 'expression', expression: '' } } };
+        return e;
+      });
+    });
+  }, []);
+
+  /** 把出邊和同一個節點的上一條（-1）或下一條（1）出邊對調；條件依出邊順序評估。 */
+  const moveEdge = useCallback((edgeId: string, delta: -1 | 1) => {
+    setEdges((es) => {
+      const edge = es.find((e) => e.id === edgeId);
+      if (!edge) return es;
+      const siblings = es.filter((e) => e.source === edge.source);
+      const other = siblings[siblings.indexOf(edge) + delta];
+      if (!other) return es;
+      return es.map((e) => (e === edge ? other : e === other ? edge : e));
+    });
+  }, []);
 
   const addNode = useCallback((type: NodeType, position: { x: number; y: number }) => {
     const [node] = toCanvas({ nodes: [newNode(type, position)], edges: [], forms: [] }).nodes;
@@ -158,13 +211,15 @@ export function useProcessCanvas(initial: ProcessDsl) {
 
   return {
     nodes: nodesWithErrors,
-    edges,
+    edges: labeledEdges,
     dsl,
     errors,
     selected: nodesWithErrors.find((n) => n.selected) ?? null,
     onNodesChange,
     onEdgesChange,
     onConnect,
+    updateBranch,
+    moveEdge,
     addNode,
     updateNode,
     removeNode,
@@ -187,6 +242,7 @@ function NodeCard({ data, selected, type }: NodeProps<RFNode>) {
         'relative rounded-lg border bg-card px-3 py-2 shadow-sm',
         round && 'rounded-full text-center',
         type === 'form' && 'border-l-4 border-l-status-returned',
+        type === 'condition' && 'border-dashed',
         selected && 'border-primary ring-2 ring-primary/30',
         hasError && 'border-destructive ring-2 ring-destructive/25',
       )}
@@ -203,6 +259,9 @@ function NodeCard({ data, selected, type }: NodeProps<RFNode>) {
           missing={data.node.type === 'form' ? '未指派填表人' : '未指派審批人'}
         />
       )}
+      {type === 'condition' && (
+        <div className="mt-1 text-[0.85em] text-muted-foreground">依 Form 資料走不同的出邊</div>
+      )}
       {(data.node.type === 'start' || data.node.type === 'form') && (
         <FormLine formId={data.node.formId} required={data.node.type === 'form'} />
       )}
@@ -214,6 +273,14 @@ function NodeCard({ data, selected, type }: NodeProps<RFNode>) {
       {type !== 'end' && <Handle type="source" position={Position.Bottom} />}
     </div>
   );
+}
+
+/** 出邊上顯示的條件；太長時截斷，完整內容在屬性面板。 */
+export function branchLabel(branch: Branch): string {
+  if (branch.type === 'default') return '預設';
+  const expression = branch.expression.trim();
+  if (!expression) return '（未設定條件）';
+  return expression.length > 28 ? `${expression.slice(0, 27)}…` : expression;
 }
 
 /** 開始與填表節點用的 Form；開始節點沒有時不顯示。 */
@@ -297,4 +364,10 @@ function PersonLine({ participantId }: { participantId: string }) {
   );
 }
 
-export const nodeTypes = { start: NodeCard, form: NodeCard, approval: NodeCard, end: NodeCard };
+export const nodeTypes = {
+  start: NodeCard,
+  form: NodeCard,
+  approval: NodeCard,
+  condition: NodeCard,
+  end: NodeCard,
+};

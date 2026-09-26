@@ -8,6 +8,11 @@
       "source": "./src/index.ts",
       "types": "./src/index.ts",
       "default": "./dist/index.js"
+    },
+    "./branch": {
+      "source": "./src/branch.ts",
+      "types": "./src/branch.ts",
+      "default": "./dist/branch.js"
     }
   },
   "scripts": {
@@ -17,6 +22,7 @@
   },
   "dependencies": {
     "@river/forms": "workspace:*",
+    "jsonata": "^2.2.2",
     "zod": "^4.6.5"
   },
   "devDependencies": {

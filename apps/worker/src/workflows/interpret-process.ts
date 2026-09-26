@@ -18,9 +18,10 @@ import {
 } from '@temporalio/workflow';
 import type { Activities, CreateTaskInput } from '../activities.js';
 
-const { loadProcessVersion, createTask, completeRequest } = proxyActivities<Activities>({
-  startToCloseTimeout: '30 seconds',
-});
+const { loadProcessVersion, createTask, evaluateCondition, completeRequest } =
+  proxyActivities<Activities>({
+    startToCloseTimeout: '30 seconds',
+  });
 
 export const taskCompletedSignal = defineSignal<[TaskCompletedSignal]>(TASK_COMPLETED_SIGNAL);
 export const resubmittedSignal = defineSignal<[ResubmittedSignal]>(RESUBMITTED_SIGNAL);
@@ -30,6 +31,7 @@ export const withdrawSignal = defineSignal(WITHDRAW_SIGNAL);
  * 通用的 interpreter：讀取 Process Version 的 DSL，從「開始」沿著連線走到「結束」。
  * 審批與填表節點建立 Task，等到 API 送來這個 Task 的 taskCompleted Signal 才往下走。
  * 填表的資料由 API 存進 Postgres，workflow 只知道 Task 完成了。
+ * 條件節點交給 evaluateCondition activity 讀取資料、執行 JSONata，workflow 只拿到選中的出邊 ID。
  *
  * Return、重新送出與 Withdraw 的狀態變化都由 API 在同一個 transaction 寫進 Postgres，workflow 只負責流轉：
  * - Task 被 Return：停下來，等發起人重新送出或 Withdraw。
@@ -62,13 +64,21 @@ export async function interpretProcess({
 
   const dsl = await loadProcessVersion(processVersionId);
   const byId = new Map(dsl.nodes.map((n) => [n.id, n]));
-  const next = (node: ProcessNode) => {
-    const edge = dsl.edges.find((e) => e.source === node.id);
+  const next = (node: ProcessNode, edgeId?: string) => {
+    const edge = dsl.edges.find((e) =>
+      edgeId === undefined ? e.source === node.id : e.id === edgeId,
+    );
     return edge && byId.get(edge.target);
   };
 
   let node: ProcessNode | undefined = dsl.nodes.find((n) => n.type === 'start');
   while (node && node.type !== 'end' && !interrupted()) {
+    // 條件節點是新的節點類型，舊的 history 裡不會出現，所以不需要 patched()。
+    if (node.type === 'condition') {
+      const edgeId = await evaluateCondition({ requestId, processVersionId, nodeId: node.id });
+      if (!interrupted()) node = next(node, edgeId);
+      continue;
+    }
     if (node.type === 'approval' || node.type === 'form') {
       // 發佈前檢查（APPROVAL_NO_ASSIGNEE、FORM_NODE_NO_ASSIGNEE）已經擋下；
       // 萬一出現，寧可讓 workflow 失敗也不要跳過這一步。

@@ -2,6 +2,7 @@ import '@xyflow/react/dist/style.css';
 import type { MeResponse, Process, ProcessSummary, ProcessVersion } from '@river/contracts';
 import {
   type Assignee,
+  type Branch,
   type DslError,
   formIdOf,
   NODE_TYPE_LABELS,
@@ -14,6 +15,8 @@ import { useQuery } from '@tanstack/react-query';
 import { useBlocker } from '@tanstack/react-router';
 import { Background, Controls, ReactFlow, ReactFlowProvider, useReactFlow } from '@xyflow/react';
 import {
+  ArrowDown,
+  ArrowUp,
   CircleAlert,
   CircleCheck,
   FileText,
@@ -52,6 +55,7 @@ import {
   NODE_ICONS,
   NODE_WIDTH,
   nodeTypes,
+  type RFEdge,
   type RFNode,
   sameDsl,
   useProcessCanvas,
@@ -491,6 +495,18 @@ function ProcessEditor({ process, me }: { process: Process; me: MeResponse }) {
                 key={canvas.selected.id}
                 node={canvas.selected}
                 forms={canvas.forms}
+                branches={
+                  canvas.selected.type === 'condition' ? (
+                    <BranchesField
+                      outgoing={canvas.edges.filter((e) => e.source === canvas.selected?.id)}
+                      nodes={canvas.nodes}
+                      forms={canvas.forms}
+                      errors={canvas.selected.data.errors}
+                      onChange={canvas.updateBranch}
+                      onMove={canvas.moveEdge}
+                    />
+                  ) : null
+                }
                 onChange={(patch) =>
                   canvas.selected && canvas.updateNode(canvas.selected.id, patch)
                 }
@@ -627,6 +643,7 @@ const PALETTE: { type: NodeType; hint: string }[] = [
   { type: 'start', hint: '流程從這裡開始，可以指定開始表單' },
   { type: 'form', hint: '指派一位 Participant 填一份 Form' },
   { type: 'approval', hint: '指派一位 Participant 審批' },
+  { type: 'condition', hint: '依 Form 資料（JSONata 表達式）走不同的出邊' },
   { type: 'end', hint: '流程結束' },
 ];
 
@@ -662,6 +679,7 @@ function Palette({ onAdd }: { onAdd: (type: NodeType) => void }) {
 function Inspector({
   node,
   forms,
+  branches,
   onChange,
   onRemove,
   onClose,
@@ -670,6 +688,8 @@ function Inspector({
 }: {
   node: RFNode;
   forms: FormSchema[];
+  /** 條件節點的出邊設定；其他節點為 null。 */
+  branches: React.ReactNode;
   onChange: (patch: Partial<NodeSettings>) => void;
   onRemove: () => void;
   onClose: () => void;
@@ -749,18 +769,21 @@ function Inspector({
           </div>
         </div>
       )}
-      {node.data.errors.length > 0 && (
+      {branches}
+      {node.data.errors.some((e) => !e.edgeId) && (
         <ul className="grid gap-1.5">
-          {node.data.errors.map((e, i) => (
-            <li
-              // biome-ignore lint/suspicious/noArrayIndexKey: 同一個節點可能有多筆完全相同的錯誤
-              key={`${e.code}-${i}`}
-              className="flex gap-1.5 rounded-md bg-destructive/8 p-2 text-[0.88em] text-destructive"
-            >
-              <CircleAlert size={14} className="mt-0.5 shrink-0" aria-hidden />
-              {e.message}
-            </li>
-          ))}
+          {node.data.errors
+            .filter((e) => !e.edgeId)
+            .map((e, i) => (
+              <li
+                // biome-ignore lint/suspicious/noArrayIndexKey: 同一個節點可能有多筆完全相同的錯誤
+                key={`${e.code}-${i}`}
+                className="flex gap-1.5 rounded-md bg-destructive/8 p-2 text-[0.88em] text-destructive"
+              >
+                <CircleAlert size={14} className="mt-0.5 shrink-0" aria-hidden />
+                {e.message}
+              </li>
+            ))}
         </ul>
       )}
       <div className="flex-1" />
@@ -773,6 +796,128 @@ function Inspector({
         <Trash2 size={14} aria-hidden /> 刪除節點
       </Button>
     </aside>
+  );
+}
+
+/**
+ * 條件節點的出邊：依順序評估每條出邊的 JSONata 表達式，第一個成立的勝出；都不成立時走預設出邊。
+ * 表達式用欄位代碼讀取這一輪填過的 Form 資料，所以列出流程裡各份 Form 的欄位代碼供參考。
+ */
+function BranchesField({
+  outgoing,
+  nodes,
+  forms,
+  errors,
+  onChange,
+  onMove,
+}: {
+  outgoing: RFEdge[];
+  nodes: RFNode[];
+  forms: FormSchema[];
+  errors: DslError[];
+  onChange: (edgeId: string, branch: Branch) => void;
+  onMove: (edgeId: string, delta: -1 | 1) => void;
+}) {
+  const used = new Set(nodes.map((n) => formIdOf(n.data.node)));
+  const keys = [
+    ...new Set(forms.filter((f) => used.has(f.id)).flatMap((f) => f.fields.map((x) => x.key))),
+  ];
+  const targetName = (id: string) => nodes.find((n) => n.id === id)?.data.node.name || '（未命名）';
+  return (
+    <div className="grid gap-2">
+      <span className="text-[0.85em] text-muted-foreground">
+        出邊（依順序評估，第一個成立的勝出）
+      </span>
+      {outgoing.length === 0 && (
+        <p className="text-[0.88em] text-muted-foreground">從這個節點拉出連線，再回來設定條件。</p>
+      )}
+      <ol className="grid gap-2">
+        {outgoing.map((edge, i) => {
+          const branch = edge.data?.branch ?? { type: 'expression', expression: '' };
+          const edgeErrors = errors.filter((e) => e.edgeId === edge.id);
+          const inputId = `branch-${edge.id}`;
+          return (
+            <li key={edge.id} className="grid gap-1.5 rounded-lg border p-2">
+              <div className="flex items-center gap-1">
+                <span className="flex-1 truncate text-[0.9em]">→ {targetName(edge.target)}</span>
+                <Button
+                  size="icon"
+                  variant="ghost"
+                  className="size-6"
+                  disabled={i === 0}
+                  aria-label="往前移"
+                  onClick={() => onMove(edge.id, -1)}
+                >
+                  <ArrowUp size={13} />
+                </Button>
+                <Button
+                  size="icon"
+                  variant="ghost"
+                  className="size-6"
+                  disabled={i === outgoing.length - 1}
+                  aria-label="往後移"
+                  onClick={() => onMove(edge.id, 1)}
+                >
+                  <ArrowDown size={13} />
+                </Button>
+              </div>
+              <label className="flex items-center gap-1.5 text-[0.85em]">
+                <input
+                  type="checkbox"
+                  checked={branch.type === 'default'}
+                  onChange={(e) =>
+                    onChange(
+                      edge.id,
+                      e.target.checked
+                        ? { type: 'default' }
+                        : { type: 'expression', expression: '' },
+                    )
+                  }
+                />
+                預設出邊（沒有任何條件成立時走這條）
+              </label>
+              {branch.type === 'expression' && (
+                <>
+                  <label htmlFor={inputId} className="sr-only">
+                    往「{targetName(edge.target)}」的條件
+                  </label>
+                  <textarea
+                    id={inputId}
+                    value={branch.expression}
+                    rows={2}
+                    spellCheck={false}
+                    placeholder="例如：amount > 10000"
+                    aria-invalid={edgeErrors.length > 0 || undefined}
+                    onChange={(e) =>
+                      onChange(edge.id, { type: 'expression', expression: e.target.value })
+                    }
+                    className="w-full rounded-md border border-input bg-card px-2 py-1 font-mono text-[0.85em] aria-invalid:border-destructive"
+                  />
+                </>
+              )}
+              {edgeErrors.map((e) => (
+                <p key={e.code} className="flex gap-1.5 text-[0.82em] text-destructive">
+                  <CircleAlert size={13} className="mt-0.5 shrink-0" aria-hidden />
+                  {e.message}
+                </p>
+              ))}
+            </li>
+          );
+        })}
+      </ol>
+      {keys.length > 0 && (
+        <div className="grid gap-1">
+          <span className="text-[0.8em] text-muted-foreground">可用的欄位代碼</span>
+          <div className="flex flex-wrap gap-1">
+            {keys.map((k) => (
+              <code key={k} className="rounded bg-muted px-1.5 py-0.5 text-[0.8em]">
+                {k}
+              </code>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -991,7 +1136,7 @@ function ErrorList({ errors, onPick }: { errors: DslError[]; onPick?: (e: DslErr
             onClick={() => onPick?.(e)}
             className="flex w-full items-center gap-3 px-4 py-1 text-left enabled:cursor-pointer enabled:hover:bg-muted"
           >
-            <span className="w-44 shrink-0 text-destructive">{e.code}</span>
+            <span className="w-60 shrink-0 truncate text-destructive">{e.code}</span>
             <span className="w-28 shrink-0 truncate text-muted-foreground">
               {e.nodeId ?? e.formId ?? '—'}
             </span>

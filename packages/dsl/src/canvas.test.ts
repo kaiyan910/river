@@ -21,6 +21,28 @@ describe('畫布與 DSL 的轉換', () => {
     expect(fromCanvas(toCanvas(dsl), dsl.forms)).toEqual(dsl);
   });
 
+  it('條件節點出邊上的條件，轉成畫布再轉回來時保留', () => {
+    const branching: ProcessDsl = {
+      nodes: [
+        { id: 'start', type: 'start', name: '開始', position: { x: 0, y: 0 } },
+        { id: 'c', type: 'condition', name: '金額判斷', position: { x: 0, y: 170 } },
+        { id: 'end', type: 'end', name: '結束', position: { x: 0, y: 340 } },
+      ],
+      edges: [
+        { id: 'e1', source: 'start', target: 'c' },
+        {
+          id: 'e2',
+          source: 'c',
+          target: 'end',
+          branch: { type: 'expression', expression: 'amount > 1' },
+        },
+        { id: 'e3', source: 'c', target: 'end', branch: { type: 'default' } },
+      ],
+      forms: [],
+    };
+    expect(fromCanvas(toCanvas(branching))).toEqual(branching);
+  });
+
   it('畫布節點帶著檢查器對它回報的錯誤', () => {
     const canvas = toCanvas(dsl, checkProcess(dsl));
 

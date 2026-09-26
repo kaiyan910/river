@@ -1,4 +1,5 @@
 import { checkForm, FORM_ERROR_CODES } from '@river/forms';
+import jsonata from 'jsonata';
 import { formIdOf, type ProcessDsl } from './schema.js';
 
 export const DSL_ERROR_CODES = [
@@ -12,6 +13,10 @@ export const DSL_ERROR_CODES = [
   'FORM_NODE_NO_ASSIGNEE',
   'MANAGER_NO_FALLBACK_ROLE',
   'NODE_FORM_MISSING',
+  'CONDITION_NO_DEFAULT',
+  'CONDITION_MULTIPLE_DEFAULTS',
+  'CONDITION_EDGE_NO_EXPRESSION',
+  'INVALID_JSONATA',
   ...FORM_ERROR_CODES,
 ] as const;
 export type DslErrorCode = (typeof DSL_ERROR_CODES)[number];
@@ -19,6 +24,8 @@ export type DslErrorCode = (typeof DSL_ERROR_CODES)[number];
 export interface DslError {
   /** 出錯的節點；整份流程層級與 Form 本身的錯誤為 null。 */
   nodeId: string | null;
+  /** 條件節點某一條出邊的錯誤：哪一條出邊（nodeId 是條件節點）。 */
+  edgeId?: string;
   code: DslErrorCode;
   message: string;
   /** Form 本身的錯誤：哪一份 Form、哪個欄位（Form 層級為 null）。 */
@@ -94,6 +101,44 @@ export function checkProcess(dsl: ProcessDsl): DslError[] {
         message: `「${node.name}」指派給發起人的 Manager，必須設定 Fallback Role。`,
       });
 
+  for (const node of dsl.nodes) {
+    if (node.type !== 'condition') continue;
+    const outgoing = dsl.edges.filter((e) => e.source === node.id);
+    const defaults = outgoing.filter((e) => e.branch?.type === 'default').length;
+    if (defaults === 0)
+      errors.push({
+        nodeId: node.id,
+        code: 'CONDITION_NO_DEFAULT',
+        message: `條件「${node.name}」必須有一條預設出邊，沒有任何條件成立時走這條。`,
+      });
+    if (defaults > 1)
+      errors.push({
+        nodeId: node.id,
+        code: 'CONDITION_MULTIPLE_DEFAULTS',
+        message: `條件「${node.name}」只能有一條預設出邊。`,
+      });
+    for (const edge of outgoing) {
+      if (edge.branch?.type === 'default') continue;
+      const expression = edge.branch?.expression.trim();
+      const at = { nodeId: node.id, edgeId: edge.id };
+      if (!expression) {
+        errors.push({
+          ...at,
+          code: 'CONDITION_EDGE_NO_EXPRESSION',
+          message: `條件「${node.name}」有一條出邊還沒設定條件。`,
+        });
+        continue;
+      }
+      const syntaxError = jsonataSyntaxError(expression);
+      if (syntaxError)
+        errors.push({
+          ...at,
+          code: 'INVALID_JSONATA',
+          message: `條件「${node.name}」有一條出邊的 JSONata 表達式有語法錯誤：${syntaxError}`,
+        });
+    }
+  }
+
   const formIds = new Set(dsl.forms.map((f) => f.id));
   for (const node of dsl.nodes) {
     if (node.type === 'form') {
@@ -133,4 +178,16 @@ export function checkProcess(dsl: ProcessDsl): DslError[] {
         });
 
   return errors;
+}
+
+/** 只解析、不執行；語法正確時回傳 null。JSONata 丟出的不是 Error，而是帶 message、position 的物件。 */
+function jsonataSyntaxError(expression: string): string | null {
+  try {
+    jsonata(expression);
+    return null;
+  } catch (e) {
+    const { message, position } = (e ?? {}) as { message?: unknown; position?: unknown };
+    const text = typeof message === 'string' ? message : '無法解析';
+    return typeof position === 'number' ? `${text}（第 ${position} 個字元）` : text;
+  }
 }

@@ -3,7 +3,7 @@ import { z } from 'zod';
 
 /**
  * Process DSL：以節點與邊組成的有向圖，以 JSON 儲存。
- * 目前有 start、form、approval、end；其他節點類型（condition、parallelSplit…）由後續 ticket 加入。
+ * 目前有 start、form、approval、condition、end；其他節點類型（parallelSplit…）由後續 ticket 加入。
  * Form 屬於 Process，跟流程圖放在同一份 DSL，發佈時一起存成 Process Version 的快照。
  */
 
@@ -65,20 +65,40 @@ export const formNodeSchema = z.object({
   assignee: assigneeSchema.nullable(),
 });
 
+/** 條件節點：本身沒有設定，分支條件放在出邊上（見 branchSchema）。 */
+export const conditionNodeSchema = z.object({ ...nodeBase, type: z.literal('condition') });
+
 export const processNodeSchema = z.discriminatedUnion('type', [
   startNodeSchema,
   formNodeSchema,
   approvalNodeSchema,
+  conditionNodeSchema,
   endNodeSchema,
 ]);
 export type ProcessNode = z.infer<typeof processNodeSchema>;
 export type NodeType = ProcessNode['type'];
 
-/** 邊的兩端在 schema 層不檢查是否存在，懸空的邊交給檢查器回報，草稿才能先儲存。 */
+/**
+ * 條件節點的出邊：一個 JSONata 表達式，或預設出邊。
+ * 表達式依出邊在 edges 裡的順序評估，第一個結果為 true 的出邊勝出；都不成立時走預設出邊。
+ * 表達式可以用欄位代碼讀取這一輪填過的 Form 資料，例如 `amount > 10000`。
+ * 草稿中表達式可以是空白或有語法錯誤，發佈前由檢查器擋下。
+ */
+export const branchSchema = z.discriminatedUnion('type', [
+  z.object({ type: z.literal('expression'), expression: z.string().max(2000) }),
+  z.object({ type: z.literal('default') }),
+]);
+export type Branch = z.infer<typeof branchSchema>;
+
+/**
+ * 邊的兩端在 schema 層不檢查是否存在，懸空的邊交給檢查器回報，草稿才能先儲存。
+ * branch 只對條件節點的出邊有意義；其他節點的出邊沒有這個欄位。
+ */
 export const processEdgeSchema = z.object({
   id: z.string().min(1),
   source: nodeIdSchema,
   target: nodeIdSchema,
+  branch: branchSchema.optional(),
 });
 export type ProcessEdge = z.infer<typeof processEdgeSchema>;
 
@@ -98,6 +118,7 @@ export const NODE_TYPE_LABELS: Record<NodeType, string> = {
   start: '開始',
   form: '填表',
   approval: '審批',
+  condition: '條件',
   end: '結束',
 };
 
@@ -114,18 +135,32 @@ export function initialProcessDsl(): ProcessDsl {
 }
 
 /**
- * 從「開始」沿著連線走到「結束」的節點順序；每個節點取第一條出邊。
- * 目前的節點類型只能組成一直線，之後有條件與並行分支時要改寫。
+ * 流程預覽的節點順序：從「開始」走得到的每個節點各列一次，而且排在所有指向它的節點之後，
+ * 所以條件分支上的節點都會列出，「結束」與分支的匯合點排在分支之後。
+ * 同樣可以排的節點，依從「開始」沿著連線走到的先後排列；遇到迴圈時依走到的先後硬排，不會漏掉節點。
  */
-export function mainPath(dsl: ProcessDsl): ProcessNode[] {
+export function nodesInOrder(dsl: ProcessDsl): ProcessNode[] {
   const byId = new Map(dsl.nodes.map((n) => [n.id, n]));
-  const path: ProcessNode[] = [];
-  let node: ProcessNode | undefined = dsl.nodes.find((n) => n.type === 'start');
-  while (node && !path.includes(node)) {
-    path.push(node);
-    const id: string = node.id;
-    const edge = dsl.edges.find((e) => e.source === id);
-    node = edge && byId.get(edge.target);
+  const successors = (id: string) =>
+    dsl.edges.filter((e) => e.source === id && byId.has(e.target)).map((e) => e.target);
+
+  const start = dsl.nodes.find((n) => n.type === 'start');
+  if (!start) return [];
+  const reached = [start.id];
+  for (let i = 0; i < reached.length; i++)
+    for (const next of successors(reached[i] as string))
+      if (!reached.includes(next)) reached.push(next);
+
+  const pending = new Map(reached.map((id) => [id, 0]));
+  for (const id of reached)
+    for (const next of successors(id)) pending.set(next, (pending.get(next) ?? 0) + 1);
+
+  const ordered: string[] = [];
+  while (ordered.length < reached.length) {
+    const remaining = reached.filter((id) => !ordered.includes(id));
+    const id = remaining.find((r) => pending.get(r) === 0) ?? (remaining[0] as string);
+    ordered.push(id);
+    for (const next of successors(id)) pending.set(next, (pending.get(next) ?? 0) - 1);
   }
-  return path;
+  return ordered.map((id) => byId.get(id) as ProcessNode);
 }

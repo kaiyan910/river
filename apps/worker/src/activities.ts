@@ -3,14 +3,16 @@ import {
   type FallbackReason,
   participants,
   processVersions,
+  requestData,
   requestEvents,
   requests,
   type TaskKind,
   tasks,
 } from '@river/db';
 import type { ProcessDsl } from '@river/dsl';
-import { ApplicationFailure } from '@temporalio/activity';
-import { and, eq, sql } from 'drizzle-orm';
+import { chooseBranch } from '@river/dsl/branch';
+import { ApplicationFailure, log } from '@temporalio/activity';
+import { and, asc, eq, sql } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
 
 export interface CreateTaskInput {
@@ -27,6 +29,13 @@ export interface CreateTaskInput {
   assigneeId?: string;
   roleId?: string;
   initiatorManager?: { fallbackRoleId: string };
+}
+
+export interface EvaluateConditionInput {
+  requestId: string;
+  processVersionId: string;
+  /** 條件節點的 ID。 */
+  nodeId: string;
 }
 
 const managers = alias(participants, 'managers');
@@ -99,6 +108,47 @@ export function createActivities(db: Database) {
           });
         return true;
       });
+    },
+
+    /**
+     * 從 Postgres 讀取條件節點的出邊與這一輪填過的 Form 資料，執行 JSONata，只回傳選中的出邊 ID：
+     * Form 資料與表達式的結果都不進 Temporal history，表達式用到 $now() 也不影響 workflow 的 determinism。
+     * 同一個欄位代碼在多份 Form 都出現時，以最後填寫的為準。
+     */
+    async evaluateCondition(input: EvaluateConditionInput): Promise<string> {
+      const [version] = await db
+        .select({ dsl: processVersions.dsl })
+        .from(processVersions)
+        .where(eq(processVersions.id, input.processVersionId));
+      if (!version)
+        throw ApplicationFailure.nonRetryable(`找不到 Process Version ${input.processVersionId}`);
+      const [request] = await db
+        .select({ round: requests.round })
+        .from(requests)
+        .where(eq(requests.id, input.requestId));
+      if (!request) throw new Error(`找不到 Request ${input.requestId}`);
+      const rows = await db
+        .select({ data: requestData.data })
+        .from(requestData)
+        .where(
+          and(eq(requestData.requestId, input.requestId), eq(requestData.round, request.round)),
+        )
+        .orderBy(asc(requestData.submittedAt));
+      const data = Object.assign({}, ...rows.map((r) => r.data));
+
+      const outgoing = version.dsl.edges.filter((e) => e.source === input.nodeId);
+      // 只記錄出錯的出邊與 JSONata 的錯誤代碼，不記錄 Form 資料。
+      const edgeId = await chooseBranch(outgoing, data, (id, error) =>
+        log.warn('條件表達式執行失敗，視為不成立', {
+          requestId: input.requestId,
+          nodeId: input.nodeId,
+          edgeId: id,
+          code: (error as { code?: unknown } | null)?.code,
+        }),
+      );
+      // 發佈前檢查（CONDITION_NO_DEFAULT）已經擋下；萬一出現，寧可讓 workflow 失敗也不要亂走。
+      if (!edgeId) throw ApplicationFailure.nonRetryable(`條件節點 ${input.nodeId} 沒有預設出邊`);
+      return edgeId;
     },
 
     async completeRequest(requestId: string): Promise<void> {

@@ -301,4 +301,92 @@ describe('DSL 檢查', () => {
       expect(checkProcess(dsl)).toEqual([]);
     });
   });
+
+  describe('條件節點', () => {
+    const condition = (id = 'amount'): ProcessNode => ({
+      id,
+      type: 'condition',
+      name: `條件 ${id}`,
+      position: at,
+    });
+    const when = (source: string, target: string, expression: string) => ({
+      ...edge(source, target),
+      branch: { type: 'expression' as const, expression },
+    });
+    const otherwise = (source: string, target: string) => ({
+      ...edge(source, target),
+      branch: { type: 'default' as const },
+    });
+
+    /** start → 金額判斷 →（amount > 10000）總經理審批 → end；預設直接到 end */
+    function branching(): ProcessDsl {
+      return {
+        nodes: [start(), condition(), approval('gm'), end()],
+        edges: [
+          edge('start', 'amount'),
+          when('amount', 'gm', 'amount > 10000'),
+          otherwise('amount', 'end'),
+          edge('gm', 'end'),
+        ],
+        forms: [],
+      };
+    }
+
+    it('每條出邊都有合法的表達式、另有一條預設出邊時沒有錯誤', () => {
+      expect(checkProcess(branching())).toEqual([]);
+    });
+
+    it('DSL schema 接受條件節點與出邊的條件', () => {
+      expect(processDslSchema.parse(branching())).toEqual(branching());
+    });
+
+    it('缺少預設出邊', () => {
+      const dsl = branching();
+      dsl.edges = dsl.edges.filter((e) => e.branch?.type !== 'default');
+      dsl.edges.push(edge('start', 'end'));
+
+      expect(checkProcess(dsl)).toEqual([
+        {
+          nodeId: 'amount',
+          code: 'CONDITION_NO_DEFAULT',
+          message: expect.stringContaining('條件 amount'),
+        },
+      ]);
+    });
+
+    it('預設出邊不能超過一條', () => {
+      const dsl = branching();
+      dsl.edges[1] = otherwise('amount', 'gm');
+
+      expect(checkProcess(dsl).map((e) => [e.code, e.nodeId])).toEqual([
+        ['CONDITION_MULTIPLE_DEFAULTS', 'amount'],
+      ]);
+    });
+
+    it('JSONata 語法錯誤，標出是哪一條出邊', () => {
+      const dsl = branching();
+      dsl.edges[1] = when('amount', 'gm', 'amount >');
+
+      expect(checkProcess(dsl)).toEqual([
+        {
+          nodeId: 'amount',
+          edgeId: 'amount->gm',
+          code: 'INVALID_JSONATA',
+          message: expect.not.stringContaining('[object Object]'),
+        },
+      ]);
+    });
+
+    it('出邊沒有設定條件，或表達式是空白', () => {
+      const dsl = branching();
+      dsl.edges[1] = edge('amount', 'gm');
+      dsl.nodes.push(approval('cfo'));
+      dsl.edges.push(when('amount', 'cfo', '  '), edge('cfo', 'end'));
+
+      expect(checkProcess(dsl).map((e) => [e.code, e.edgeId])).toEqual([
+        ['CONDITION_EDGE_NO_EXPRESSION', 'amount->gm'],
+        ['CONDITION_EDGE_NO_EXPRESSION', 'amount->cfo'],
+      ]);
+    });
+  });
 });

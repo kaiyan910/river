@@ -129,6 +129,8 @@ export const dslErrorSchema = z.object({
   nodeId: z.string().nullable(),
   code: z.enum(DSL_ERROR_CODES),
   message: z.string(),
+  /** 條件節點出邊的錯誤才有：哪一條出邊。 */
+  edgeId: z.string().optional(),
   /** Form 本身的錯誤才有：哪一份 Form、哪個欄位。 */
   formId: z.string().optional(),
   fieldId: z.string().nullable().optional(),
@@ -195,7 +197,7 @@ export type PublishRejected = z.infer<typeof publishRejectedSchema>;
 
 // ─── 入口網站：發起 Request ──────────────────────────────────────────────
 
-/** 流程預覽的一步：從「開始」沿著連線走到「結束」。審批與填表節點帶處理人，開始與填表節點帶 Form。 */
+/** 流程預覽的一步：依流程順序排列，條件分支上的步驟都列出（條件節點本身不列）。審批與填表節點帶處理人，開始與填表節點帶 Form。 */
 export const processStepSchema = z.object({
   nodeId: z.string(),
   type: z.enum(['start', 'form', 'approval', 'end']),

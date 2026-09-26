@@ -28,7 +28,7 @@ import {
   checkProcess,
   formIdOf,
   initialProcessDsl,
-  mainPath,
+  nodesInOrder,
   type ProcessDsl,
   type ProcessNode,
   type TaskAssignee,
@@ -345,17 +345,23 @@ function stepAssignee(names: Names, assignee: Assignee): StepAssignee {
   };
 }
 
-/** 流程預覽：沿著主線列出每個節點，審批與填表節點帶處理人，開始與填表節點帶 Form。 */
+/**
+ * 流程預覽：依流程順序列出每個節點（條件分支上的節點也列出），審批與填表節點帶處理人，開始與填表節點帶 Form。
+ * 條件節點由系統自動判斷，不是 Participant 會經過的一步，所以不列出。
+ */
 export function stepsOf(dsl: ProcessDsl, names: Names): ProcessStep[] {
-  return mainPath(dsl).map((node) => {
+  return nodesInOrder(dsl).flatMap((node) => {
+    if (node.type === 'condition') return [];
     const assignee =
       node.type === 'approval' || node.type === 'form' ? (node.assignee ?? null) : null;
-    return {
-      nodeId: node.id,
-      type: node.type,
-      name: node.name,
-      assignee: assignee && stepAssignee(names, assignee),
-      formId: formOf(dsl, node)?.id ?? null,
-    };
+    return [
+      {
+        nodeId: node.id,
+        type: node.type,
+        name: node.name,
+        assignee: assignee && stepAssignee(names, assignee),
+        formId: formOf(dsl, node)?.id ?? null,
+      },
+    ];
   });
 }

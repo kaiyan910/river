@@ -1,6 +1,6 @@
 import type { FormSchema } from '@river/forms';
 import type { DslError } from './check.js';
-import type { NodeType, ProcessDsl, ProcessEdge, ProcessNode } from './schema.js';
+import type { Branch, NodeType, ProcessDsl, ProcessEdge, ProcessNode } from './schema.js';
 
 type WithoutPosition<T> = T extends unknown ? Omit<T, 'position'> : never;
 
@@ -21,10 +21,16 @@ export interface CanvasNode {
   data: CanvasNodeData;
 }
 
+export interface CanvasEdgeData extends Record<string, unknown> {
+  /** 條件節點出邊上的條件；其他出邊沒有。 */
+  branch?: Branch;
+}
+
 export interface CanvasEdge {
   id: string;
   source: string;
   target: string;
+  data?: CanvasEdgeData;
 }
 
 export interface Canvas {
@@ -40,7 +46,12 @@ export function toCanvas(dsl: ProcessDsl, errors: DslError[] = []): Canvas {
       position,
       data: { node, errors: errors.filter((e) => e.nodeId === node.id) },
     })),
-    edges: dsl.edges.map(({ id, source, target }) => ({ id, source, target })),
+    edges: dsl.edges.map(({ id, source, target, branch }) => ({
+      id,
+      source,
+      target,
+      ...(branch && { data: { branch } }),
+    })),
   };
 }
 
@@ -64,7 +75,14 @@ export function fromCanvas(
           position: { x: n.position.x, y: n.position.y },
         }) as ProcessNode,
     ),
-    edges: canvas.edges.map(({ id, source, target }): ProcessEdge => ({ id, source, target })),
+    edges: canvas.edges.map(
+      ({ id, source, target, data }): ProcessEdge => ({
+        id,
+        source,
+        target,
+        ...(data?.branch && { branch: data.branch }),
+      }),
+    ),
     forms,
   };
 }
