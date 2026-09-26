@@ -1,4 +1,5 @@
 import {
+  type Assignee,
   type CanvasNodeData,
   checkProcess,
   fromCanvas,
@@ -24,10 +25,10 @@ import {
   type NodeProps,
   Position,
 } from '@xyflow/react';
-import { CirclePlay, CircleStop, ClipboardPen, FileText, UserCheck } from 'lucide-react';
+import { CirclePlay, CircleStop, ClipboardPen, FileText, UserCheck, Users } from 'lucide-react';
 import { createContext, useCallback, useContext, useMemo, useState } from 'react';
 import { Avatar } from '@/components/people';
-import { directoryQueryOptions } from '@/lib/org';
+import { directoryQueryOptions, roleDirectoryQueryOptions } from '@/lib/org';
 import { cn } from '@/lib/utils';
 
 export type RFNode = Node<CanvasNodeData, NodeType>;
@@ -190,7 +191,7 @@ function NodeCard({ data, selected, type }: NodeProps<RFNode>) {
       </div>
       {(data.node.type === 'approval' || data.node.type === 'form') && (
         <AssigneeLine
-          participantId={data.node.assignee?.participantId}
+          assignee={data.node.assignee}
           missing={data.node.type === 'form' ? '未指派填表人' : '未指派審批人'}
         />
       )}
@@ -227,15 +228,29 @@ function FormLine({ formId, required }: { formId?: string | null; required: bool
   );
 }
 
-function AssigneeLine({
-  participantId,
-  missing,
-}: {
-  participantId: string | undefined;
-  missing: string;
-}) {
+function AssigneeLine({ assignee, missing }: { assignee: Assignee | null; missing: string }) {
+  if (!assignee) return <div className="mt-1 text-[0.85em] text-destructive">{missing}</div>;
+  return assignee.type === 'role' ? (
+    <RoleLine roleId={assignee.roleId} />
+  ) : (
+    <PersonLine participantId={assignee.participantId} />
+  );
+}
+
+function RoleLine({ roleId }: { roleId: string }) {
+  const { data: roles } = useQuery(roleDirectoryQueryOptions);
+  const role = roles?.find((r) => r.id === roleId);
+  return (
+    <div className="mt-1 flex items-center gap-1.5 text-[0.85em] text-muted-foreground">
+      <Users size={14} aria-hidden className="shrink-0" />
+      <span className="truncate">{role ? `${role.name}（Role）` : '…'}</span>
+      {role?.memberCount === 0 && <span className="text-destructive">（沒有成員）</span>}
+    </div>
+  );
+}
+
+function PersonLine({ participantId }: { participantId: string }) {
   const { data: people } = useQuery(directoryQueryOptions);
-  if (!participantId) return <div className="mt-1 text-[0.85em] text-destructive">{missing}</div>;
   const person = people?.find((p) => p.id === participantId);
   return (
     <div className="mt-1 flex items-center gap-1.5 text-[0.85em] text-muted-foreground">

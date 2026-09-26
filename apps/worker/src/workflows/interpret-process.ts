@@ -81,7 +81,9 @@ export async function interpretProcess({
         nodeId: node.id,
         nodeName: node.name,
         kind: node.type,
-        assigneeId: node.assignee.participantId,
+        ...(node.assignee.type === 'participant'
+          ? { assigneeId: node.assignee.participantId }
+          : { roleId: node.assignee.roleId }),
       });
       // Request 已經不是 running（被 Withdraw 但 Signal 沒送到）：沒有 Task 可等，直接結束。
       // 舊版 activity 沒有回傳值（undefined），所以只認 false，重播舊 history 時行為不變。

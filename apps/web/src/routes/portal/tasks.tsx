@@ -209,12 +209,19 @@ function ClosedTask({
 
 function YourTurn({ task }: { task: RequestTask }) {
   return (
-    <h2 className="font-semibold">
-      輪到你：{task.nodeName}
-      <span className="ml-2 font-normal text-[0.86em] text-muted-foreground">
-        收到於 {timeAgo(task.createdAt)}
-      </span>
-    </h2>
+    <header className="grid gap-0.5">
+      <h2 className="font-semibold">
+        輪到你：{task.nodeName}
+        <span className="ml-2 font-normal text-[0.86em] text-muted-foreground">
+          收到於 {timeAgo(task.createdAt)}
+        </span>
+      </h2>
+      {task.assignee.type === 'role' && (
+        <p className="text-[0.86em] text-muted-foreground">
+          指派給「{task.assignee.name}」：任一成員都可以直接處理，最先送出的決定生效。
+        </p>
+      )}
+    </header>
   );
 }
 

@@ -134,7 +134,7 @@ describe('發起並核准 Request', () => {
           nodeId: 'manager',
           type: 'approval',
           name: '主管審批',
-          assignee: { id: approverId, name: '林美玲' },
+          assignee: { type: 'participant', id: approverId, name: '林美玲' },
           formId: null,
         },
         { nodeId: 'end', type: 'end', name: '結束', assignee: null, formId: null },

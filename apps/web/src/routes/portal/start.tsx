@@ -6,7 +6,12 @@ import { useState } from 'react';
 import { FormRunner } from '@/components/form-fields';
 import { toast } from '@/components/toast';
 import { Button } from '@/components/ui/button';
-import { formRejection, startableProcessesQueryOptions, useStartRequest } from '@/lib/requests';
+import {
+  assigneeLabel,
+  formRejection,
+  startableProcessesQueryOptions,
+  useStartRequest,
+} from '@/lib/requests';
 import { cn } from '@/lib/utils';
 import { Card, EmptyDetail, ListColumn, ListMessage, ListSearch } from './request-view';
 
@@ -107,7 +112,7 @@ function StartForm({ process, onCancel }: { process: StartableProcess; onCancel:
                 {step.type === 'form' && <ClipboardPen size={11} aria-hidden />}
                 {step.type === 'end' && <Flag size={11} aria-hidden />}
                 {step.name}
-                {step.assignee && `：${step.assignee.name}`}
+                {step.assignee && `：${assigneeLabel(step.assignee)}`}
               </span>
             </li>
           ))}

@@ -1,9 +1,11 @@
 import type { Permission } from '@river/auth';
 import type { ProcessDsl } from '@river/dsl';
+import { sql } from 'drizzle-orm';
 import {
   type AnyPgColumn,
   bigint,
   boolean,
+  check,
   index,
   integer,
   jsonb,
@@ -198,9 +200,10 @@ export const tasks = pgTable(
     kind: text('kind').$type<TaskKind>().notNull().default('approval'),
     /** 建立時 Request 的第幾輪。 */
     round: integer('round').notNull().default(1),
-    assigneeId: uuid('assignee_id')
-      .notNull()
-      .references(() => participants.id),
+    /** 指派給特定 Participant 時才有；指派給 Role 時為 null，由最先送出的成員處理（completedBy）。 */
+    assigneeId: uuid('assignee_id').references(() => participants.id),
+    /** 指派給 Role 時才有；成員在查詢當下決定，之後加入 Role 的人也看得到。 */
+    roleId: uuid('role_id').references(() => roles.id),
     status: text('status').$type<TaskStatus>().notNull().default('open'),
     outcome: text('outcome').$type<TaskOutcome>(),
     comment: text('comment'),
@@ -209,7 +212,12 @@ export const tasks = pgTable(
     version: integer('version').notNull().default(1),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
-  (t) => [index().on(t.requestId), index().on(t.assigneeId, t.status)],
+  (t) => [
+    index().on(t.requestId),
+    index().on(t.assigneeId, t.status),
+    index().on(t.roleId, t.status),
+    check('tasks_one_assignee', sql`num_nonnulls(${t.assigneeId}, ${t.roleId}) = 1`),
+  ],
 );
 
 export const REQUEST_EVENT_TYPES = [

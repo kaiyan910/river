@@ -1,4 +1,5 @@
 import {
+  type AssigneeRef,
   type FormRejected,
   formRejectedSchema,
   type MyTasksStatus,
@@ -132,6 +133,11 @@ export function formRejection(error: unknown): FormRejected | null {
   if (!(error instanceof ApiError) || error.status !== 422) return null;
   const parsed = formRejectedSchema.safeParse(error.body);
   return parsed.success ? parsed.data : null;
+}
+
+/** 畫面上的指派對象：人名，或「財務審批人」任一成員。 */
+export function assigneeLabel(a: AssigneeRef): string {
+  return a.type === 'role' ? `「${a.name}」任一成員` : a.name;
 }
 
 /** R-000042 */

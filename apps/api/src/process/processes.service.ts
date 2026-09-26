@@ -6,6 +6,7 @@ import {
   UnprocessableEntityException,
 } from '@nestjs/common';
 import type {
+  AssigneeRef,
   Process,
   ProcessStep,
   ProcessSummary,
@@ -13,8 +14,16 @@ import type {
   PublishRejected,
   StartableProcess,
 } from '@river/contracts';
-import { authUsers, type Database, participants, processes, processVersions } from '@river/db';
 import {
+  authUsers,
+  type Database,
+  participants,
+  processes,
+  processVersions,
+  roles,
+} from '@river/db';
+import {
+  type Assignee,
   checkProcess,
   formIdOf,
   initialProcessDsl,
@@ -61,7 +70,7 @@ export class ProcessesService {
   /** 每個已發佈 Process 的目前版本與步驟預覽；還沒發佈過的 Process 不會出現。 */
   async startable(): Promise<StartableProcess[]> {
     const rows = await currentVersions(this.db);
-    const names = await participantNames(
+    const names = await lookupNames(
       this.db,
       rows.flatMap((r) => assigneesOf(r.dsl)),
     );
@@ -257,10 +266,52 @@ export async function participantNames(
   return new Map(rows.map((r) => [r.id, r.name]));
 }
 
-/** 審批與填表節點指派的 Participant。 */
-export function assigneesOf(dsl: ProcessDsl): string[] {
+/** 人名與 Role 名稱，畫面上的指派對象與處理人都由 ID 查出。 */
+export interface Names {
+  people: Map<string, string>;
+  roles: Map<string, string>;
+}
+
+/** 要查名稱的對象：Participant ID，或指派對象（Participant 或 Role）。 */
+type Named = string | Assignee;
+
+/** 一次查出一批 Participant 與 Role 的名稱。 */
+export async function lookupNames(db: Pick<Database, 'select'>, targets: Named[]): Promise<Names> {
+  const people = targets.flatMap((t) =>
+    typeof t === 'string' ? [t] : t.type === 'participant' ? [t.participantId] : [],
+  );
+  const roleIds = [
+    ...new Set(
+      targets.flatMap((t) => (typeof t !== 'string' && t.type === 'role' ? [t.roleId] : [])),
+    ),
+  ];
+  const roleRows = roleIds.length
+    ? await db
+        .select({ id: roles.id, name: roles.name })
+        .from(roles)
+        .where(inArray(roles.id, roleIds))
+    : [];
+  return {
+    people: await participantNames(db, people),
+    roles: new Map(roleRows.map((r) => [r.id, r.name])),
+  };
+}
+
+/** 指派對象加上名稱。 */
+export function assigneeRef(names: Names, assignee: Assignee): AssigneeRef {
+  return assignee.type === 'participant'
+    ? {
+        type: 'participant',
+        id: assignee.participantId,
+        name: names.people.get(assignee.participantId) ?? '',
+      }
+    : { type: 'role', id: assignee.roleId, name: names.roles.get(assignee.roleId) ?? '' };
+}
+
+/** 審批與填表節點的指派對象。 */
+export function assigneesOf(dsl: ProcessDsl): Assignee[] {
   return dsl.nodes.flatMap((n) =>
-    (n.type === 'approval' || n.type === 'form') && n.assignee ? [n.assignee.participantId] : [],
+    (n.type === 'approval' || n.type === 'form') && n.assignee ? [n.assignee] : [],
   );
 }
 
@@ -278,15 +329,15 @@ export function startFormOf(dsl: ProcessDsl): FormSchema | null {
 }
 
 /** 流程預覽：沿著主線列出每個節點，審批與填表節點帶處理人，開始與填表節點帶 Form。 */
-export function stepsOf(dsl: ProcessDsl, names: Map<string, string>): ProcessStep[] {
+export function stepsOf(dsl: ProcessDsl, names: Names): ProcessStep[] {
   return mainPath(dsl).map((node) => {
-    const assigneeId =
-      node.type === 'approval' || node.type === 'form' ? node.assignee?.participantId : undefined;
+    const assignee =
+      node.type === 'approval' || node.type === 'form' ? (node.assignee ?? null) : null;
     return {
       nodeId: node.id,
       type: node.type,
       name: node.name,
-      assignee: assigneeId ? { id: assigneeId, name: names.get(assigneeId) ?? '' } : null,
+      assignee: assignee && assigneeRef(names, assignee),
       formId: formOf(dsl, node)?.id ?? null,
     };
   });

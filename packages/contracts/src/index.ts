@@ -84,6 +84,15 @@ export type Role = z.infer<typeof roleSchema>;
 /** `GET /api/roles` */
 export const roleListSchema = z.array(roleSchema);
 
+/** `GET /api/roles/directory`：Designer 指派人工步驟時挑選 Role 用的精簡清單。 */
+export const roleDirectoryEntrySchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  memberCount: z.number().int().nonnegative(),
+});
+export type RoleDirectoryEntry = z.infer<typeof roleDirectoryEntrySchema>;
+export const roleDirectorySchema = z.array(roleDirectoryEntrySchema);
+
 /** `POST /api/roles`、`PATCH /api/roles/:id` */
 export const roleNameSchema = z.object({ name: z.string().trim().min(1).max(100) });
 export type RoleNameInput = z.infer<typeof roleNameSchema>;
@@ -101,6 +110,10 @@ export const directorySchema = z.array(directoryEntrySchema);
 // ─── Process ─────────────────────────────────────────────────────────────
 
 const actorSchema = z.object({ id: z.string(), name: z.string() });
+
+/** 人工步驟或 Task 的指派對象：特定 Participant，或一個 Role（id、name 是 Role 的）。 */
+export const assigneeRefSchema = actorSchema.extend({ type: z.enum(['participant', 'role']) });
+export type AssigneeRef = z.infer<typeof assigneeRefSchema>;
 
 export const dslErrorSchema = z.object({
   nodeId: z.string().nullable(),
@@ -177,7 +190,7 @@ export const processStepSchema = z.object({
   nodeId: z.string(),
   type: z.enum(['start', 'form', 'approval', 'end']),
   name: z.string(),
-  assignee: actorSchema.nullable(),
+  assignee: assigneeRefSchema.nullable(),
   formId: z.string().nullable(),
 });
 export type ProcessStep = z.infer<typeof processStepSchema>;
@@ -231,7 +244,11 @@ const requestProcessSchema = z.object({
 });
 
 /** Request 目前在等的 Task；清單上的「目前步驟」。 */
-const pendingTaskSchema = z.object({ id: z.string(), nodeName: z.string(), assignee: actorSchema });
+const pendingTaskSchema = z.object({
+  id: z.string(),
+  nodeName: z.string(),
+  assignee: assigneeRefSchema,
+});
 
 /** `GET /api/requests/mine` 的一列。 */
 export const requestSummarySchema = z.object({
@@ -269,7 +286,8 @@ export const requestTaskSchema = z.object({
   nodeName: z.string(),
   /** 審批或填表。 */
   kind: taskKindSchema,
-  assignee: actorSchema,
+  /** 指派給 Role 時任一成員都可以處理，實際處理的人看 completedBy。 */
+  assignee: assigneeRefSchema,
   status: taskStatusSchema,
   /** 審批 Task 核准後是 approved、Return 後是 returned；填表 Task 送出後是 submitted。 */
   outcome: z.enum(['approved', 'returned', 'submitted']).nullable(),
@@ -304,7 +322,12 @@ export const requestEventSchema = z.object({
   /** 做這件事的人；系統事件（流轉、完成）為 null。 */
   actor: actorSchema.nullable(),
   task: z
-    .object({ id: z.string(), nodeName: z.string(), kind: taskKindSchema, assignee: actorSchema })
+    .object({
+      id: z.string(),
+      nodeName: z.string(),
+      kind: taskKindSchema,
+      assignee: assigneeRefSchema,
+    })
     .nullable(),
   comment: z.string().nullable(),
 });
@@ -338,7 +361,10 @@ export const requestDetailSchema = requestSummarySchema.extend({
 });
 export type RequestDetail = z.infer<typeof requestDetailSchema>;
 
-/** `GET /api/tasks/mine?status=open|completed`：「我的待辦」的一列。 */
+/**
+ * `GET /api/tasks/mine?status=open|completed`：「我的待辦」的一列。
+ * open：指派給我，或指派給我所屬 Role 的 Task；completed：我處理過的 Task。
+ */
 export const myTaskSchema = requestTaskSchema.extend({
   request: requestSummarySchema.pick({
     id: true,

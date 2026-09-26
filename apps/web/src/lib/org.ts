@@ -6,6 +6,7 @@ import {
   type Participant,
   participantListSchema,
   participantSchema,
+  roleDirectorySchema,
   roleListSchema,
   roleSchema,
 } from '@river/contracts';
@@ -22,6 +23,13 @@ export const participantsQueryOptions = queryOptions({
 export const directoryQueryOptions = queryOptions({
   queryKey: ['participants', 'directory'],
   queryFn: () => api('/participants/directory', { schema: directorySchema }),
+  staleTime: 60_000,
+});
+
+/** 挑選 Role 用的精簡清單（Designer 把人工步驟指派給 Role）。 */
+export const roleDirectoryQueryOptions = queryOptions({
+  queryKey: ['roles', 'directory'],
+  queryFn: () => api('/roles/directory', { schema: roleDirectorySchema }),
   staleTime: 60_000,
 });
 

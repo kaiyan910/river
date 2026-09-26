@@ -5,7 +5,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import type { Role } from '@river/contracts';
+import type { Role, RoleDirectoryEntry } from '@river/contracts';
 import {
   authAccounts,
   authUsers,
@@ -14,7 +14,7 @@ import {
   roleMembers,
   roles,
 } from '@river/db';
-import { and, asc, eq } from 'drizzle-orm';
+import { and, asc, count, eq } from 'drizzle-orm';
 import { DATABASE } from '../tokens.js';
 import { participantStatus } from './participants.service.js';
 
@@ -52,6 +52,15 @@ export class RolesService {
         .filter((m) => m.roleId === role.id)
         .map((m) => ({ id: m.id, name: m.name, email: m.email, status: participantStatus(m) })),
     }));
+  }
+
+  async directory(): Promise<RoleDirectoryEntry[]> {
+    return this.db
+      .select({ id: roles.id, name: roles.name, memberCount: count(roleMembers.participantId) })
+      .from(roles)
+      .leftJoin(roleMembers, eq(roleMembers.roleId, roles.id))
+      .groupBy(roles.id)
+      .orderBy(asc(roles.name));
   }
 
   async get(id: string): Promise<Role> {

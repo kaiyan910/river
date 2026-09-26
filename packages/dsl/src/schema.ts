@@ -19,9 +19,13 @@ const nodeBase = {
   position: positionSchema,
 };
 
-/** 人工步驟的指派對象。之後會加上 Role 與發起人的 Manager。 */
+/**
+ * 人工步驟的指派對象：特定 Participant，或一個 Role（任一成員都可以直接處理，最先送出的生效）。
+ * 之後會加上發起人的 Manager。
+ */
 export const assigneeSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('participant'), participantId: z.string().min(1) }),
+  z.object({ type: z.literal('role'), roleId: z.string().min(1) }),
 ]);
 export type Assignee = z.infer<typeof assigneeSchema>;
 
@@ -42,7 +46,7 @@ export const approvalNodeSchema = z.object({
   assignee: assigneeSchema.nullable(),
 });
 
-/** 填表節點：指派一位 Participant 填一份 Form；發佈前兩者都必須設定。 */
+/** 填表節點：指派一位 Participant 或一個 Role 填一份 Form；發佈前兩者都必須設定。 */
 export const formNodeSchema = z.object({
   ...nodeBase,
   type: z.literal('form'),

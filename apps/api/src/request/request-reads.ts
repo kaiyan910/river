@@ -16,18 +16,24 @@ import {
   requests,
   tasks,
 } from '@river/db';
-import { formIdOf } from '@river/dsl';
+import { type Assignee, formIdOf } from '@river/dsl';
 import { and, asc, desc, eq, inArray, max, type SQL } from 'drizzle-orm';
-import { assigneesOf, participantNames, stepsOf } from '../process/processes.service.js';
+import {
+  assigneeRef,
+  assigneesOf,
+  lookupNames,
+  type Names,
+  stepsOf,
+} from '../process/processes.service.js';
 import { DATABASE } from '../tokens.js';
+import { assignedTo, taskAssignee } from './task-access.js';
 
-type Names = Map<string, string>;
 type TaskRow = typeof tasks.$inferSelect;
 
-const actor = (names: Names, id: string) => ({ id, name: names.get(id) ?? '' });
+const actor = (names: Names, id: string) => ({ id, name: names.people.get(id) ?? '' });
 const iso = (d: Date) => d.toISOString();
 
-/** 「我的申請」「我的待辦」與 Request 明細共用的讀取。人名一律由 Participant ID 查出。 */
+/** 「我的申請」「我的待辦」與 Request 明細共用的讀取。人名與 Role 名稱一律由 ID 查出。 */
 @Injectable()
 export class RequestReads {
   constructor(@Inject(DATABASE) private readonly db: Database) {}
@@ -37,11 +43,19 @@ export class RequestReads {
     return this.summaries(eq(requests.initiatorId, initiatorId));
   }
 
-  async myTasks(assigneeId: string, status: MyTasksStatus): Promise<MyTask[]> {
+  /**
+   * open：指派給我、或指派給我所屬 Role 的 Task；Role 的 Task 被任一成員完成後就從所有人的清單消失。
+   * completed：我實際處理過的 Task。
+   */
+  async myTasks(participantId: string, status: MyTasksStatus): Promise<MyTask[]> {
     const rows = await this.db
       .select()
       .from(tasks)
-      .where(and(eq(tasks.assigneeId, assigneeId), eq(tasks.status, status)))
+      .where(
+        status === 'open'
+          ? and(assignedTo(this.db, participantId), eq(tasks.status, 'open'))
+          : and(eq(tasks.completedBy, participantId), eq(tasks.status, 'completed')),
+      )
       .orderBy(status === 'open' ? desc(tasks.createdAt) : desc(tasks.completedAt));
     const summaries = await this.summaries(
       inArray(
@@ -50,7 +64,7 @@ export class RequestReads {
       ),
     );
     const byId = new Map(summaries.map((s) => [s.id, s]));
-    const names = await participantNames(this.db, rows.flatMap(taskPeople));
+    const names = await lookupNames(this.db, rows.flatMap(taskPeople));
     return rows.flatMap((t) => {
       const r = byId.get(t.requestId);
       if (!r) return [];
@@ -60,7 +74,7 @@ export class RequestReads {
   }
 
   /**
-   * 發起人與經手的審批人、填表人看得到；其他人（包括不存在的 Request）回 undefined。
+   * 發起人與經手的審批人、填表人（包括指派 Role 的成員）看得到；其他人（包括不存在的 Request）回 undefined。
    * 看得到的人也看得到每一步填寫的 Form 資料（唯讀）；只顯示目前這一輪的資料，
    * Task 與時間軸則保留每一輪的紀錄。
    */
@@ -72,10 +86,12 @@ export class RequestReads {
       .from(tasks)
       .where(eq(tasks.requestId, requestId))
       .orderBy(asc(tasks.createdAt));
-    const involved =
-      summary.initiator.id === viewerId ||
-      taskRows.some((t) => t.assigneeId === viewerId || t.completedBy === viewerId);
-    if (!involved) return undefined;
+    if (
+      summary.initiator.id !== viewerId &&
+      !taskRows.some((t) => t.completedBy === viewerId) &&
+      !(await this.isAssignedTo(requestId, viewerId))
+    )
+      return undefined;
 
     const [current] = await this.db
       .select({ dsl: processVersions.dsl, round: requests.round })
@@ -95,7 +111,7 @@ export class RequestReads {
       .orderBy(asc(requestData.submittedAt));
 
     const dsl = current?.dsl ?? { nodes: [], edges: [], forms: [] };
-    const names = await participantNames(this.db, [
+    const names = await lookupNames(this.db, [
       ...taskRows.flatMap(taskPeople),
       ...eventRows.flatMap((e) => (e.actorId ? [e.actorId] : [])),
       ...dataRows.map((d) => d.submittedBy),
@@ -116,7 +132,7 @@ export class RequestReads {
               id: task.id,
               nodeName: task.nodeName,
               kind: task.kind,
-              assignee: actor(names, task.assigneeId),
+              assignee: assigneeRef(names, taskAssignee(task)),
             }
           : null,
         comment: e.comment,
@@ -138,6 +154,15 @@ export class RequestReads {
       tasks: taskRows.map((t) => toTask(t, names)),
       events,
     };
+  }
+
+  private async isAssignedTo(requestId: string, participantId: string): Promise<boolean> {
+    const [row] = await this.db
+      .select({ id: tasks.id })
+      .from(tasks)
+      .where(and(eq(tasks.requestId, requestId), assignedTo(this.db, participantId)))
+      .limit(1);
+    return !!row;
   }
 
   private async summaries(where: SQL | undefined): Promise<RequestSummary[]> {
@@ -189,9 +214,9 @@ export class RequestReads {
           .where(and(inArray(tasks.requestId, returnedIds), eq(tasks.outcome, 'returned')))
           .orderBy(desc(tasks.completedAt))
       : [];
-    const names = await participantNames(this.db, [
+    const names = await lookupNames(this.db, [
       ...rows.map((r) => r.initiatorId),
-      ...open.map((t) => t.assigneeId),
+      ...open.map(taskAssignee),
       ...returnedTasks.flatMap(taskPeople),
     ]);
     return rows.map((r) => ({
@@ -203,7 +228,11 @@ export class RequestReads {
       initiator: actor(names, r.initiatorId),
       openTasks: open
         .filter((t) => t.requestId === r.id)
-        .map((t) => ({ id: t.id, nodeName: t.nodeName, assignee: actor(names, t.assigneeId) })),
+        .map((t) => ({
+          id: t.id,
+          nodeName: t.nodeName,
+          assignee: assigneeRef(names, taskAssignee(t)),
+        })),
       returned: returnedOf(
         returnedTasks.find((t) => t.requestId === r.id),
         names,
@@ -224,8 +253,9 @@ function returnedOf(t: TaskRow | undefined, names: Names): RequestSummary['retur
   };
 }
 
-function taskPeople(t: TaskRow): string[] {
-  return t.completedBy ? [t.assigneeId, t.completedBy] : [t.assigneeId];
+/** Task 的指派對象與實際處理的人。 */
+function taskPeople(t: TaskRow): (string | Assignee)[] {
+  return t.completedBy ? [taskAssignee(t), t.completedBy] : [taskAssignee(t)];
 }
 
 function toTask(t: TaskRow, names: Names): RequestTask {
@@ -234,7 +264,7 @@ function toTask(t: TaskRow, names: Names): RequestTask {
     nodeId: t.nodeId,
     nodeName: t.nodeName,
     kind: t.kind,
-    assignee: actor(names, t.assigneeId),
+    assignee: assigneeRef(names, taskAssignee(t)),
     status: t.status,
     outcome: t.outcome,
     comment: t.comment,

@@ -1,6 +1,7 @@
 import '@xyflow/react/dist/style.css';
 import type { MeResponse, Process, ProcessSummary, ProcessVersion } from '@river/contracts';
 import {
+  type Assignee,
   type DslError,
   formIdOf,
   NODE_TYPE_LABELS,
@@ -22,6 +23,7 @@ import {
   Search,
   Send,
   Trash2,
+  Users,
   Workflow,
   X,
 } from 'lucide-react';
@@ -31,7 +33,7 @@ import { toast } from '@/components/toast';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { directoryQueryOptions } from '@/lib/org';
+import { directoryQueryOptions, roleDirectoryQueryOptions } from '@/lib/org';
 import {
   processesQueryOptions,
   processQueryOptions,
@@ -700,13 +702,10 @@ function Inspector({
       </div>
       {(settings.type === 'approval' || settings.type === 'form') && (
         <AssigneeField
-          label={
-            settings.type === 'form' ? '填表人（特定 Participant）' : '審批人（特定 Participant）'
-          }
-          participantId={settings.assignee?.participantId ?? null}
-          onChange={(participantId) =>
-            onChange({ assignee: participantId ? { type: 'participant', participantId } : null })
-          }
+          key={node.id}
+          label={settings.type === 'form' ? '填表人' : '審批人'}
+          assignee={settings.assignee}
+          onChange={(assignee) => onChange({ assignee })}
         />
       )}
       {(settings.type === 'start' || settings.type === 'form') && (
@@ -777,20 +776,123 @@ function Inspector({
   );
 }
 
+const ASSIGNEE_MODES = [
+  { key: 'participant', label: '特定人員' },
+  { key: 'role', label: 'Role' },
+] as const;
+
+/** 指派對象：特定 Participant，或一個 Role（任一成員都可以直接處理，最先送出的生效）。 */
 function AssigneeField({
   label,
-  participantId,
+  assignee,
   onChange,
 }: {
   label: string;
+  assignee: Assignee | null;
+  onChange: (assignee: Assignee | null) => void;
+}) {
+  // 還沒選好對象時也要記得正在選哪一種。
+  const [mode, setMode] = useState<Assignee['type']>(assignee?.type ?? 'participant');
+  return (
+    <div className="grid gap-1.5">
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-[0.85em] text-muted-foreground">{label}</span>
+        <div
+          role="group"
+          aria-label={`${label}的指派方式`}
+          className="inline-flex rounded-md bg-muted p-0.5 text-[0.8em]"
+        >
+          {ASSIGNEE_MODES.map((m) => (
+            <button
+              key={m.key}
+              type="button"
+              aria-pressed={mode === m.key}
+              onClick={() => {
+                if (m.key === mode) return;
+                setMode(m.key);
+                onChange(null);
+              }}
+              className={cn(
+                'cursor-pointer rounded px-2 py-0.5 text-muted-foreground',
+                mode === m.key && 'bg-card text-foreground shadow-sm',
+              )}
+            >
+              {m.label}
+            </button>
+          ))}
+        </div>
+      </div>
+      {mode === 'participant' ? (
+        <ParticipantAssignee
+          participantId={assignee?.type === 'participant' ? assignee.participantId : null}
+          onChange={(participantId) =>
+            onChange(participantId ? { type: 'participant', participantId } : null)
+          }
+        />
+      ) : (
+        <RoleAssignee
+          roleId={assignee?.type === 'role' ? assignee.roleId : null}
+          onChange={(roleId) => onChange(roleId ? { type: 'role', roleId } : null)}
+        />
+      )}
+    </div>
+  );
+}
+
+function RoleAssignee({
+  roleId,
+  onChange,
+}: {
+  roleId: string | null;
+  onChange: (roleId: string | null) => void;
+}) {
+  const roles = useQuery(roleDirectoryQueryOptions);
+  const role = roles.data?.find((r) => r.id === roleId);
+  return (
+    <>
+      <div className="relative">
+        <Users
+          size={14}
+          aria-hidden
+          className="-translate-y-1/2 pointer-events-none absolute top-1/2 left-2 text-muted-foreground"
+        />
+        <select
+          aria-label="Role"
+          value={roleId ?? ''}
+          disabled={roles.isPending}
+          aria-invalid={!roleId || undefined}
+          onChange={(e) => onChange(e.target.value || null)}
+          className="h-[2.5em] w-full rounded-lg border border-input bg-card pr-2 pl-7 aria-invalid:border-destructive"
+        >
+          <option value="">選擇 Role…</option>
+          {roles.data?.map((r) => (
+            <option key={r.id} value={r.id}>
+              {r.name}（{r.memberCount} 人）
+            </option>
+          ))}
+        </select>
+      </div>
+      <p className="text-[0.8em] text-muted-foreground">
+        {role && role.memberCount === 0
+          ? '這個 Role 目前沒有成員，Task 會沒有人可以處理。'
+          : 'Role 的每位成員都會看到這個 Task，不需要認領；最先送出的決定生效。'}
+      </p>
+      {roles.isError && <p className="text-[0.85em] text-destructive">{roles.error.message}</p>}
+    </>
+  );
+}
+
+function ParticipantAssignee({
+  participantId,
+  onChange,
+}: {
   participantId: string | null;
   onChange: (participantId: string | null) => void;
 }) {
   const people = useQuery(directoryQueryOptions);
   const person = people.data?.find((p) => p.id === participantId);
   return (
-    <div className="grid gap-1.5">
-      <span className="text-[0.85em] text-muted-foreground">{label}</span>
+    <>
       {participantId ? (
         <div className="flex items-center gap-2 rounded-lg border px-2 py-1.5">
           {person && <Avatar id={person.id} name={person.name} size={24} />}
@@ -812,7 +914,7 @@ function AssigneeField({
         />
       )}
       {people.isError && <p className="text-[0.85em] text-destructive">{people.error.message}</p>}
-    </div>
+    </>
   );
 }
 

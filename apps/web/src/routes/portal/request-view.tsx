@@ -14,7 +14,7 @@ import type { ReactNode } from 'react';
 import { FormDataView } from '@/components/form-fields';
 import { Avatar } from '@/components/people';
 import { Input } from '@/components/ui/input';
-import { isAdvancing, requestNumber } from '@/lib/requests';
+import { assigneeLabel, isAdvancing, requestNumber } from '@/lib/requests';
 import { formatTime } from '@/lib/time';
 import { cn } from '@/lib/utils';
 
@@ -178,7 +178,7 @@ export function RequestStatus({
         {!withStep
           ? '進行中'
           : step
-            ? `${step.nodeName} · 等待 ${request.openTasks.map((t) => t.assignee.name).join('、')}`
+            ? `${step.nodeName} · 等待 ${request.openTasks.map((t) => assigneeLabel(t.assignee)).join('、')}`
             : '處理中'}
       </span>
     </span>
@@ -309,7 +309,7 @@ export function Progress({ request }: { request: RequestDetail }) {
                     ? state === 'done'
                       ? '已完成'
                       : ''
-                    : step.assignee?.name}
+                    : step.assignee && assigneeLabel(step.assignee)}
               </span>
             </div>
             {i < request.steps.length - 1 && (
@@ -332,7 +332,7 @@ function describeEvent(e: RequestEvent): string {
     case 'request.started':
       return `${e.actor?.name} 發起申請`;
     case 'task.created':
-      return `流轉到「${e.task?.nodeName}」，等待 ${e.task?.assignee.name} 處理`;
+      return `流轉到「${e.task?.nodeName}」，等待 ${e.task && assigneeLabel(e.task.assignee)} 處理`;
     case 'task.completed':
       return e.task?.kind === 'form'
         ? `${e.actor?.name} 在「${e.task?.nodeName}」送出表單`

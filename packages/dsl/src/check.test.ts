@@ -1,7 +1,7 @@
 import type { FormSchema } from '@river/forms';
 import { describe, expect, it } from 'vitest';
 import { checkProcess } from './check.js';
-import type { ProcessDsl, ProcessNode } from './schema.js';
+import { type ProcessDsl, type ProcessNode, processDslSchema } from './schema.js';
 
 const at = { x: 0, y: 0 };
 const start = (id = 'start'): ProcessNode => ({ id, type: 'start', name: '開始', position: at });
@@ -114,6 +114,23 @@ describe('DSL 檢查', () => {
         message: expect.stringContaining('審批 manager'),
       },
     ]);
+  });
+
+  it('審批與填表節點可以指派給 Role', () => {
+    const role = { type: 'role' as const, roleId: 'r-finance' };
+    const dsl: ProcessDsl = {
+      nodes: [
+        start(),
+        { ...formNode('register'), assignee: role } as ProcessNode,
+        { ...approval('finance'), assignee: role } as ProcessNode,
+        end(),
+      ],
+      edges: [edge('start', 'register'), edge('register', 'finance'), edge('finance', 'end')],
+      forms: [advance],
+    };
+
+    expect(processDslSchema.parse(dsl)).toEqual(dsl);
+    expect(checkProcess(dsl)).toEqual([]);
   });
 
   it('節點名稱不能空白', () => {

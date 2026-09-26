@@ -17,7 +17,9 @@ export interface CreateTaskInput {
   nodeId: string;
   nodeName: string;
   kind: TaskKind;
-  assigneeId: string;
+  /** 指派給特定 Participant 或 Role，兩者剛好有一個（欄位名稱沿用舊版，執行中的 activity 重試時仍然相容）。 */
+  assigneeId?: string;
+  roleId?: string;
 }
 
 /** interpreter 需要的流程圖；不含 Form schema，Temporal history 裡只有節點與連線。 */
@@ -66,7 +68,8 @@ export function createActivities(db: Database) {
             nodeName: input.nodeName,
             kind: input.kind,
             round: request.round,
-            assigneeId: input.assigneeId,
+            assigneeId: input.assigneeId ?? null,
+            roleId: input.roleId ?? null,
           })
           .onConflictDoNothing({ target: tasks.id })
           .returning({ id: tasks.id });

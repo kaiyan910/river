@@ -15,7 +15,7 @@ import {
   type TaskOutcome,
   tasks,
 } from '@river/db';
-import { Client } from '@temporalio/client';
+import { Client, WorkflowNotFoundError } from '@temporalio/client';
 import { and, eq, sql } from 'drizzle-orm';
 import type { ActiveParticipant } from '../auth/active-participant.js';
 import { formOf, participantNames } from '../process/processes.service.js';
@@ -23,6 +23,7 @@ import { DATABASE, TEMPORAL_CLIENT } from '../tokens.js';
 import { saveStepData, validateStepData } from './form-data.js';
 import { RequestReads } from './request-reads.js';
 import { supersedeOpenTasks } from './supersede.js';
+import { assignedTo, assignedToOrHandledBy } from './task-access.js';
 
 @Injectable()
 export class TasksService {
@@ -39,6 +40,7 @@ export class TasksService {
   /**
    * 先以樂觀鎖（status = open 且 version 相同）完成 Task 並寫入事件，提交後才送出 taskCompleted Signal。
    * 只有更新成功的一方會送 Signal；workflow 端冪等，Signal 失敗時可以安全重送。
+   * 指派給 Role 的 Task 任一成員都可以直接處理，不需要認領；最先送出的生效，其他人收到「已由 X 處理」。
    * 填表 Task 的資料依 Process Version 裡的 Form 驗證，和 Task 一起存進 request_data；Signal 不帶資料。
    *
    * Return（只有審批 Task 可以）在同一個 transaction 裡把 Request 改成 returned，
@@ -56,14 +58,13 @@ export class TasksService {
         kind: tasks.kind,
         nodeId: tasks.nodeId,
         status: tasks.status,
-        assigneeId: tasks.assigneeId,
         dsl: processVersions.dsl,
       })
       .from(tasks)
       .innerJoin(requests, eq(requests.id, tasks.requestId))
       .innerJoin(processVersions, eq(processVersions.id, requests.processVersionId))
-      .where(eq(tasks.id, taskId));
-    if (!task || task.assigneeId !== me.id) throw new NotFoundException('找不到這個 Task');
+      .where(and(eq(tasks.id, taskId), assignedToOrHandledBy(this.db, me.id)));
+    if (!task) throw new NotFoundException('找不到這個 Task');
     if (task.status !== 'open') await this.explainConflict(taskId, me);
     const allowed: TaskOutcome[] = task.kind === 'form' ? ['submitted'] : ['approved', 'returned'];
     if (!allowed.includes(input.outcome))
@@ -101,7 +102,7 @@ export class TasksService {
         .where(
           and(
             eq(tasks.id, taskId),
-            eq(tasks.assigneeId, me.id),
+            assignedTo(tx, me.id),
             eq(tasks.status, 'open'),
             eq(tasks.version, input.version),
           ),
@@ -138,9 +139,14 @@ export class TasksService {
     return detail;
   }
 
+  /** workflow 已經結束時（例如重送的是最後一步的 Signal）不需要再通知它。 */
   private async signalCompleted(requestId: string, taskId: string, outcome: TaskOutcome) {
     const signal: TaskCompletedSignal = { taskId, outcome };
-    await this.temporal.workflow.getHandle(requestId).signal(TASK_COMPLETED_SIGNAL, signal);
+    try {
+      await this.temporal.workflow.getHandle(requestId).signal(TASK_COMPLETED_SIGNAL, signal);
+    } catch (error) {
+      if (!(error instanceof WorkflowNotFoundError)) throw error;
+    }
   }
 
   /**
@@ -149,8 +155,11 @@ export class TasksService {
    * 萬一上一次沒送到，Request 才不會一直停在「處理中」。
    */
   private async explainConflict(taskId: string, me: ActiveParticipant): Promise<never> {
-    const [task] = await this.db.select().from(tasks).where(eq(tasks.id, taskId));
-    if (!task || task.assigneeId !== me.id) throw new NotFoundException('找不到這個 Task');
+    const [task] = await this.db
+      .select()
+      .from(tasks)
+      .where(and(eq(tasks.id, taskId), assignedToOrHandledBy(this.db, me.id)));
+    if (!task) throw new NotFoundException('找不到這個 Task');
     if (task.status === 'superseded') {
       const [request] = await this.db
         .select({ status: requests.status })
