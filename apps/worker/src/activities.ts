@@ -1,4 +1,5 @@
 import {
+  authUsers,
   type Database,
   type FallbackReason,
   participants,
@@ -22,6 +23,7 @@ import {
   requestSummary,
   requestUrl,
   roleMemberEmails,
+  sendPendingReassign,
   sendToEach,
   taskUrl,
 } from './notifications.js';
@@ -268,7 +270,8 @@ export function createActivities(db: Database, notification: NotificationDeps) {
     /**
      * 寄出 Request 的通知。寄信失敗時由 Temporal 重試，所以可能重複寄出，但不會漏寄。
      * 寄出前確認事情仍然成立：Task 還沒處理（已經作廢或完成就不必再通知）、Request 仍是 returned 或真的完成了。
-     * 停用的 Participant 收不到信。
+     * 停用的 Participant 收不到信；新 Task 直接指派給已停用的 Participant 時，這個 Task 進入「待 Reassign」清單，
+     * 改寄信通知 Administrator。
      */
     async notify(input: NotifyInput): Promise<void> {
       const request = await requestSummary(db, input.requestId);
@@ -276,6 +279,12 @@ export function createActivities(db: Database, notification: NotificationDeps) {
       const props = { requestTitle: request.title, processName: request.processName };
 
       if (input.event === 'taskCreated' || input.event === 'taskEscalated') {
+        // 直接指派給已停用的 Participant：Task 進入「待 Reassign」清單，改寄信通知 Administrator。
+        const deactivated = await deactivatedAssignee(db, input.taskId);
+        if (deactivated) {
+          await sendPendingReassign(db, notification, deactivated.name, [props]);
+          return;
+        }
         const to = await openTaskHandlerEmails(db, input.taskId);
         if (!to) return;
         await sendToEach(
@@ -394,7 +403,8 @@ export function createActivities(db: Database, notification: NotificationDeps) {
     },
 
     /**
-     * Escalation：原 Task 變成 superseded，為新的處理人建立 Task（同一個節點、同一輪），寫入 task.escalated 事件。
+     * Escalation：原 Task 變成 superseded，為新的處理人建立 Task（同一個節點、同一輪，replacesTaskId 指向原 Task），
+     * 寫入 task.escalated 事件。
      * 絕不會自動核准：只是換人處理。
      * 先鎖住 Request 再鎖住 Task（與 API 的 Return、Withdraw、完成 Task 同樣的順序）：
      * Request 已經不是 running、或 Task 已經不是 open（剛好有人處理了）時不轉交。
@@ -457,6 +467,7 @@ export function createActivities(db: Database, notification: NotificationDeps) {
           round: task.round,
           assigneeId: assignment.assigneeId,
           roleId: assignment.roleId,
+          replacesTaskId: task.id,
         });
         await tx.insert(requestEvents).values({
           requestId: input.requestId,
@@ -502,6 +513,20 @@ async function openTaskHandlerEmails(db: Database, taskId: string): Promise<stri
   return task.roleId
     ? roleMemberEmails(db, task.roleId)
     : activeEmails(db, task.assigneeId ? [task.assigneeId] : []);
+}
+
+/** open 的 Task 直接指派給已停用的 Participant 時，回傳此人；其他情況為 undefined。 */
+async function deactivatedAssignee(
+  db: Database,
+  taskId: string,
+): Promise<{ name: string } | undefined> {
+  const [row] = await db
+    .select({ name: authUsers.name, deactivatedAt: participants.deactivatedAt })
+    .from(tasks)
+    .innerJoin(participants, eq(participants.id, tasks.assigneeId))
+    .innerJoin(authUsers, eq(authUsers.id, participants.userId))
+    .where(and(eq(tasks.id, taskId), eq(tasks.status, 'open')));
+  return row?.deactivatedAt ? { name: row.name } : undefined;
 }
 
 /** 這個 Task 已經寄過幾次 Reminder。 */

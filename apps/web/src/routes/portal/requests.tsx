@@ -37,10 +37,10 @@ import {
 
 type Tab = 'active' | 'closed' | 'all';
 
-/** 進行中包括等待自己修改的「已退回」；已結束包括完成與撤回。 */
+/** 進行中包括等待自己修改的「已退回」；已結束包括完成、撤回與 Cancel。 */
 const TAB_STATUSES: Record<Tab, Status[] | null> = {
   active: ['running', 'returned'],
-  closed: ['completed', 'withdrawn'],
+  closed: ['completed', 'withdrawn', 'cancelled'],
   all: null,
 };
 const inTab = (t: Tab, status: Status) => TAB_STATUSES[t]?.includes(status) ?? true;

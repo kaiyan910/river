@@ -1,6 +1,9 @@
 import {
+  CANCEL_SIGNAL,
   type InterpretProcessInput,
+  REASSIGN_SIGNAL,
   RESUBMITTED_SIGNAL,
+  type ReassignSignal,
   type ResubmittedSignal,
   TASK_COMPLETED_SIGNAL,
   type TaskCompletedSignal,
@@ -66,6 +69,8 @@ const HOUR = 60 * 60 * 1000;
 export const taskCompletedSignal = defineSignal<[TaskCompletedSignal]>(TASK_COMPLETED_SIGNAL);
 export const resubmittedSignal = defineSignal<[ResubmittedSignal]>(RESUBMITTED_SIGNAL);
 export const withdrawSignal = defineSignal(WITHDRAW_SIGNAL);
+export const cancelSignal = defineSignal(CANCEL_SIGNAL);
+export const reassignSignal = defineSignal<[ReassignSignal]>(REASSIGN_SIGNAL);
 
 /**
  * 通用的 interpreter：讀取 Process Version 的 DSL，從「開始」沿著連線走到「結束」。
@@ -80,14 +85,21 @@ export const withdrawSignal = defineSignal(WITHDRAW_SIGNAL);
  * 人工節點設定了 Reminder 或 Escalation 時，等待 Task 期間用 durable timer 計時（見 waitForTask）：
  * Reminder 寄信提醒目前的處理人；Escalation 把 Task 轉給新的處理人，之後改等新的 Task。Task 完成時 timer 一併取消。
  *
- * Return、重新送出與 Withdraw 的狀態變化都由 API 在同一個 transaction 寫進 Postgres，workflow 只負責流轉：
- * - Task 被 Return：停下來，等發起人重新送出或 Withdraw；並行的其他分支也一起停下來。
+ * Return、重新送出、Withdraw、Cancel 與 Reassign 的狀態變化都由 API 在同一個 transaction 寫進 Postgres，
+ * workflow 只負責流轉：
+ * - Task 被 Return：停下來，等發起人重新送出、Withdraw 或 Cancel；並行的其他分支也一起停下來。
  * - 重新送出：以 continueAsNew 帶著新的輪次從「開始」重新執行，history 不會隨 Return 次數變大。
- * - Withdraw：直接結束。
+ * - Withdraw、Cancel：直接結束。
+ * - Reassign：原 Task 已經作廢，改等接手的新 Task，並通知新的處理人。
  *
  * Signal 冪等：只記錄完成過的 taskId，workflow 只等「目前這個」Task，
  * 所以重複的 Signal、或早就處理過的 Task 的 Signal 都不會有任何影響；
- * resubmitted 只在輪次比目前新時才重新開始，withdraw 重複送出也一樣結束。
+ * resubmitted 只在輪次比目前新時才重新開始，withdraw、cancel 重複送出也一樣結束；
+ * reassign 只記下「誰由誰接手」，重複送出記下的是同一件事。
+ *
+ * Cancel 與 Reassign 是新的 Signal，舊的 history 裡不會出現：沒有收到時條件判斷、timer 與呼叫的 activity
+ * 和原本完全一樣；收到 reassign 之後才有的新指令（通知新的處理人、重新計時）只會出現在新的 history 裡，
+ * 所以不需要 patched()。
  */
 export async function interpretProcess({
   requestId,
@@ -97,6 +109,9 @@ export async function interpretProcess({
   const outcomes = new Map<string, TaskCompletedSignal['outcome']>();
   let latestRound = round;
   let withdrawn = false;
+  let cancelled = false;
+  // Reassign：作廢的 taskId → 接手的新 taskId。
+  const reassigned = new Map<string, string>();
   setHandler(taskCompletedSignal, ({ taskId, outcome }) => {
     if (!outcomes.has(taskId)) outcomes.set(taskId, outcome);
   });
@@ -106,8 +121,15 @@ export async function interpretProcess({
   setHandler(withdrawSignal, () => {
     withdrawn = true;
   });
+  setHandler(cancelSignal, () => {
+    cancelled = true;
+  });
+  setHandler(reassignSignal, ({ taskId, newTaskId }) => {
+    if (!reassigned.has(taskId)) reassigned.set(taskId, newTaskId);
+  });
+  const ended = () => withdrawn || cancelled;
   // 萬一 Return 的 Signal 沒送到，收到重新送出一樣從頭開始。
-  const interrupted = () => withdrawn || latestRound > round;
+  const interrupted = () => ended() || latestRound > round;
 
   // createTask 發現 Request 已經不是 running：在哪裡發現的（見 walk 裡 createTask 之後的說明）。
   let notRunning: 'outsideBranch' | 'inBranch' | null = null;
@@ -248,24 +270,42 @@ export async function interpretProcess({
   ): Promise<string> => {
     let taskId = firstTaskId;
     const done = () => outcomes.has(taskId) || stopped();
+    // 目前的 Task 被 Reassign：改等接手的 Task，並通知新的處理人。
+    const reassignedTo = () => (done() ? undefined : reassigned.get(taskId));
+    const doneOrMoved = () => done() || reassignedTo() !== undefined;
+    const followReassign = async (): Promise<boolean> => {
+      const replacement = reassignedTo();
+      if (replacement === undefined) return false;
+      taskId = replacement;
+      await notify({ requestId, event: 'taskCreated', taskId });
+      return true;
+    };
     const { reminder } = node;
     const escalateTo = escalationOf(node);
     if ((!reminder && !escalateTo) || !patched(TIMEOUTS_PATCH)) {
-      await condition(done);
+      do await condition(doneOrMoved);
+      while (await followReassign());
       return taskId;
     }
     const reminderEvery = reminder && reminder.afterHours > 0 ? reminder.afterHours * HOUR : null;
     let remindAt = reminderEvery ? Date.now() + reminderEvery : Infinity;
     let reminders = 0;
-    let escalateAt = escalateTo ? Date.now() + escalateTo.afterHours * HOUR : Infinity;
+    const escalateEvery = escalateTo ? escalateTo.afterHours * HOUR : Infinity;
+    let escalateAt = Date.now() + escalateEvery;
 
     while (!done()) {
       const dueAt = Math.min(remindAt, escalateAt);
-      if (dueAt === Infinity) {
-        await condition(done);
-        break;
+      let timedOut = false;
+      if (dueAt === Infinity) await condition(doneOrMoved);
+      else timedOut = !(await condition(doneOrMoved, Math.max(dueAt - Date.now(), 1)));
+      // Reassign 後 timer 跟著新的 Task 重新計時：Reminder 寄給新的處理人；還沒 Escalation 的話，時限也重新起算。
+      if (await followReassign()) {
+        reminders = 0;
+        remindAt = reminderEvery ? Date.now() + reminderEvery : Infinity;
+        if (escalateAt !== Infinity) escalateAt = Date.now() + escalateEvery;
+        continue;
       }
-      if (await condition(done, Math.max(dueAt - Date.now(), 1))) break;
+      if (!timedOut) break;
 
       if (escalateTo && Date.now() >= escalateAt) {
         escalateAt = Infinity;
@@ -297,7 +337,7 @@ export async function interpretProcess({
   // 發佈前檢查（PARALLEL_JOIN_UNMATCHED）已經擋下；萬一出現，寧可讓 workflow 失敗也不要當作已完成。
   if (last) throw ApplicationFailure.nonRetryable(`並行匯合「${last.name}」沒有對應的並行分支`);
 
-  if (withdrawn) return;
+  if (ended()) return;
   if (latestRound > round)
     return continueAsNew<typeof interpretProcess>({
       requestId,

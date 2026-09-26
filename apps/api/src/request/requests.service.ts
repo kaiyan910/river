@@ -6,6 +6,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import type {
+  CancelRequestInput,
   RequestDetail,
   RequestSummary,
   ResubmitRequestInput,
@@ -13,6 +14,7 @@ import type {
   WithdrawRequestInput,
 } from '@river/contracts';
 import {
+  CANCEL_SIGNAL,
   INTERPRET_PROCESS_WORKFLOW,
   type InterpretProcessInput,
   RESUBMITTED_SIGNAL,
@@ -164,8 +166,61 @@ export class RequestsService {
     });
     if (!withdrawn) return this.explainNotChangeable(id, 'withdraw', me);
 
-    await this.signalWithdraw(id);
+    await this.signalEnded(id, WITHDRAW_SIGNAL);
     return this.detail(id, me);
+  }
+
+  /**
+   * Administrator 強制終止尚未完成（running 或 returned）的 Request，原因必填。
+   * 和 Withdraw 一樣：先鎖住並更新 Request，再把 open 的 Task 全部作廢，提交後才送出 cancel Signal，workflow 收到後結束。
+   * 資料與歷程都保留；Cancel 的人不一定看得到 Request 明細，所以回傳清單上的一列。
+   */
+  async cancel(
+    id: string,
+    input: CancelRequestInput,
+    me: ActiveParticipant,
+  ): Promise<RequestSummary> {
+    const cancelled = await this.db.transaction(async (tx) => {
+      const [updated] = await tx
+        .update(requests)
+        .set({ status: 'cancelled' })
+        .where(and(eq(requests.id, id), inArray(requests.status, ['running', 'returned'])))
+        .returning({ id: requests.id });
+      if (!updated) return false;
+      await tx.insert(requestEvents).values({
+        requestId: id,
+        type: 'request.cancelled',
+        actorId: me.id,
+        comment: input.comment,
+      });
+      await supersedeOpenTasks(tx, id);
+      return true;
+    });
+    if (!cancelled) {
+      const [request] = await this.db
+        .select({ status: requests.status })
+        .from(requests)
+        .where(eq(requests.id, id));
+      if (!request) throw new NotFoundException('找不到這筆 Request');
+      // 上一次其實已經成功（例如 Signal 送出失敗後重試）：再送一次 Signal，workflow 端冪等。
+      if (request.status === 'cancelled') await this.signalEnded(id, CANCEL_SIGNAL);
+      const reasons: Record<string, string> = {
+        completed: '這筆 Request 已經完成，不能 Cancel。',
+        withdrawn: '發起人已經撤回這筆 Request。',
+        cancelled: '這筆 Request 已經 Cancel。',
+      };
+      throw new ConflictException(reasons[request.status] ?? '這筆 Request 目前不能 Cancel。');
+    }
+
+    await this.signalEnded(id, CANCEL_SIGNAL);
+    const summary = await this.reads.summary(id);
+    if (!summary) throw new NotFoundException('找不到這筆 Request');
+    return summary;
+  }
+
+  /** 尚未結束的所有 Request：持有 request.cancel 或 task.reassign 的人處理例外狀況用。 */
+  active(): Promise<RequestSummary[]> {
+    return this.reads.active();
   }
 
   mine(me: ActiveParticipant): Promise<RequestSummary[]> {
@@ -199,13 +254,15 @@ export class RequestsService {
       throw new NotFoundException('找不到這筆 Request');
     if (action === 'resubmit' && request.status === 'running' && request.round > 1)
       await this.signalResubmitted(id, request.round);
-    if (action === 'withdraw' && request.status === 'withdrawn') await this.signalWithdraw(id);
+    if (action === 'withdraw' && request.status === 'withdrawn')
+      await this.signalEnded(id, WITHDRAW_SIGNAL);
     const verb = action === 'resubmit' ? '重新送出' : 'Withdraw';
     const reasons: Record<typeof request.status, string> = {
       running: '這筆 Request 正在進行中，不需要重新送出。',
       returned: '這筆 Request 已被 Return，請先修改後重新送出。',
       completed: `這筆 Request 已經完成，不能${verb}。`,
       withdrawn: '這筆 Request 已經撤回。',
+      cancelled: '這筆 Request 已被 Administrator Cancel。',
     };
     throw new ConflictException(reasons[request.status]);
   }
@@ -215,10 +272,13 @@ export class RequestsService {
     await this.temporal.workflow.getHandle(id).signal(RESUBMITTED_SIGNAL, signal);
   }
 
-  /** workflow 已經結束時（例如重送 Signal）不需要再通知它。 */
-  private async signalWithdraw(id: string): Promise<void> {
+  /** Withdraw 或 Cancel。workflow 已經結束時（例如重送 Signal）不需要再通知它。 */
+  private async signalEnded(
+    id: string,
+    signal: typeof WITHDRAW_SIGNAL | typeof CANCEL_SIGNAL,
+  ): Promise<void> {
     try {
-      await this.temporal.workflow.getHandle(id).signal(WITHDRAW_SIGNAL);
+      await this.temporal.workflow.getHandle(id).signal(signal);
     } catch (error) {
       if (!(error instanceof WorkflowNotFoundError)) throw error;
     }

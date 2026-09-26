@@ -139,6 +139,7 @@ export function Card({ title, children }: { title: string; children: ReactNode }
 const FINAL_STATUS = {
   completed: { label: '已完成', dot: 'bg-status-approved' },
   withdrawn: { label: '已撤回', dot: 'bg-status-closed' },
+  cancelled: { label: '已 Cancel', dot: 'bg-status-closed' },
 } as const;
 
 /**
@@ -152,7 +153,11 @@ export function RequestStatus({
   request: Pick<RequestSummary, 'status' | 'openTasks' | 'returned'>;
   withStep?: boolean;
 }) {
-  if (request.status === 'completed' || request.status === 'withdrawn') {
+  if (
+    request.status === 'completed' ||
+    request.status === 'withdrawn' ||
+    request.status === 'cancelled'
+  ) {
     const { label, dot } = FINAL_STATUS[request.status];
     return (
       <span className="inline-flex items-center gap-1.5 whitespace-nowrap text-[0.86em] text-muted-foreground">
@@ -260,7 +265,11 @@ function describeEvent(e: RequestEvent): string {
     case 'task.returned':
       return `${e.actor?.name} 在「${e.task?.nodeName}」Return，退回給發起人修改`;
     case 'task.superseded':
-      return `「${e.task?.nodeName}」的 Task 已作廢`;
+      return e.actor
+        ? `${e.actor.name} 把「${e.task?.nodeName}」的 Task 作廢`
+        : `「${e.task?.nodeName}」的 Task 已作廢`;
+    case 'task.reassigned':
+      return `${e.actor?.name} 把「${e.task?.nodeName}」Reassign 給 ${e.task && assigneeLabel(e.task.assignee)}`;
     case 'task.reminded':
       return `「${e.task?.nodeName}」逾時未處理，已提醒 ${e.task && assigneeLabel(e.task.assignee)}`;
     case 'task.escalated': {
@@ -281,6 +290,8 @@ function describeEvent(e: RequestEvent): string {
       return `${e.actor?.name} 修改後重新送出，從頭開始審批`;
     case 'request.withdrawn':
       return `${e.actor?.name} 撤回申請`;
+    case 'request.cancelled':
+      return `${e.actor?.name} Cancel 了這筆申請`;
     case 'request.completed':
       return '申請完成';
   }
@@ -299,6 +310,7 @@ const EVENT_TONE: Partial<Record<RequestEvent['type'], string>> = {
   'task.returned': 'text-status-returned',
   'task.escalated': 'text-status-returned',
   'request.resubmitted': 'text-status-open',
+  'request.cancelled': 'text-destructive',
 };
 
 /** 時間軸：逐列顯示 request_events。 */

@@ -13,7 +13,10 @@ export function ForbiddenPage({ item }: { item: NavItem }) {
         </div>
         <h1 className="font-semibold text-[1.3em]">沒有權限查看「{item.label}」</h1>
         <p className="max-w-[36em] text-muted-foreground">
-          需要 <code className="font-mono">{item.requires}</code>{' '}
+          需要{' '}
+          <code className="font-mono">
+            {typeof item.requires === 'string' ? item.requires : item.requires?.join(' 或 ')}
+          </code>{' '}
           Permission。如果你需要這個功能，請聯絡 Administrator。
         </p>
         <Link to="/" className={buttonVariants({ variant: 'outline', size: 'sm' })}>

@@ -1,4 +1,6 @@
 import { Module } from '@nestjs/common';
+import { RequestModule } from '../request/request.module.js';
+import { DeactivationService } from './deactivation.service.js';
 import { InvitationsController } from './invitations.controller.js';
 import { InvitationsService } from './invitations.service.js';
 import { MeController } from './me.controller.js';
@@ -7,9 +9,10 @@ import { ParticipantsService } from './participants.service.js';
 import { RolesController } from './roles.controller.js';
 import { RolesService } from './roles.service.js';
 
-/** 人員與組織：Participant、Role、Manager、Permission、邀請。 */
+/** 人員與組織：Participant、Role、Manager、Permission、邀請、停用。 */
 @Module({
+  imports: [RequestModule],
   controllers: [MeController, ParticipantsController, RolesController, InvitationsController],
-  providers: [ParticipantsService, RolesService, InvitationsService],
+  providers: [ParticipantsService, RolesService, InvitationsService, DeactivationService],
 })
 export class OrgModule {}

@@ -192,6 +192,10 @@ function ClosedTask({
         {superseded ? (
           request.status === 'withdrawn' ? (
             '發起人已撤回這筆申請，這個 Task 已作廢，不需要再處理。'
+          ) : request.status === 'cancelled' ? (
+            'Administrator 已 Cancel 這筆申請，這個 Task 已作廢，不需要再處理。'
+          ) : request.tasks.some((t) => t.replacesTaskId === task.id) ? (
+            '這個 Task 已 Reassign 給其他人，不需要再處理。'
           ) : (
             '這個 Task 已作廢，不需要再處理。'
           )

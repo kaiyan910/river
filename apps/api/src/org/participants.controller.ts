@@ -12,7 +12,9 @@ import {
 import { ApiCreatedResponse, ApiOkResponse } from '@nestjs/swagger';
 import {
   createParticipantSchema,
+  type DeactivationImpact,
   type DirectoryEntry,
+  deactivationImpactSchema,
   directorySchema,
   participantListSchema,
   participantSchema,
@@ -22,6 +24,7 @@ import {
 import { createZodDto } from 'nestjs-zod';
 import type { ActiveParticipant } from '../auth/active-participant.js';
 import { CurrentParticipant, RequirePermission } from '../auth/require-permission.js';
+import { DeactivationService } from './deactivation.service.js';
 import { ParticipantsService } from './participants.service.js';
 
 class ParticipantDto extends createZodDto(participantSchema) {}
@@ -30,12 +33,16 @@ class DirectoryDto extends createZodDto(directorySchema) {}
 class CreateParticipantDto extends createZodDto(createParticipantSchema) {}
 class UpdateParticipantDto extends createZodDto(updateParticipantSchema) {}
 class SetPermissionsDto extends createZodDto(setPermissionsSchema) {}
+class DeactivationImpactDto extends createZodDto(deactivationImpactSchema) {}
 
 const Id = () => Param('id', new ParseUUIDPipe());
 
 @Controller('participants')
 export class ParticipantsController {
-  constructor(private readonly participants: ParticipantsService) {}
+  constructor(
+    private readonly participants: ParticipantsService,
+    private readonly deactivation: DeactivationService,
+  ) {}
 
   /** 持有 role.manage 的人也需要人員清單來挑選 Role 成員。 */
   @Get()
@@ -45,9 +52,15 @@ export class ParticipantsController {
     return this.participants.list();
   }
 
-  /** 挑選人員用的精簡清單；Designer 指派審批人時需要。 */
+  /** 挑選人員用的精簡清單；Designer 指派審批人、Administrator Reassign Task 時需要。 */
   @Get('directory')
-  @RequirePermission('process.edit', 'process.publish', 'user.manage', 'role.manage')
+  @RequirePermission(
+    'process.edit',
+    'process.publish',
+    'user.manage',
+    'role.manage',
+    'task.reassign',
+  )
   @ApiOkResponse({ type: DirectoryDto })
   directory(): Promise<DirectoryEntry[]> {
     return this.participants.directory();
@@ -87,5 +100,25 @@ export class ParticipantsController {
   @RequirePermission('user.manage')
   resendInvitation(@Id() id: string, @CurrentParticipant() me: ActiveParticipant): Promise<void> {
     return this.participants.resendInvitation(id, me);
+  }
+
+  /** 停用前預覽影響範圍：直接指派給此人的 open Task，以及以此人為 Manager 的 Participant。 */
+  @Get(':id/deactivation-impact')
+  @RequirePermission('user.manage')
+  @ApiOkResponse({ type: DeactivationImpactDto })
+  deactivationImpact(@Id() id: string): Promise<DeactivationImpact> {
+    return this.deactivation.impact(id);
+  }
+
+  /** 停用帳號：session 立即失效，資料一律不刪除。 */
+  @Post(':id/deactivate')
+  @HttpCode(200)
+  @RequirePermission('user.manage')
+  @ApiOkResponse({ type: ParticipantDto })
+  deactivate(
+    @Id() id: string,
+    @CurrentParticipant() me: ActiveParticipant,
+  ): Promise<ParticipantDto> {
+    return this.deactivation.deactivate(id, me);
   }
 }

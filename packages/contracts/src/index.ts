@@ -268,11 +268,17 @@ export type ProcessFlow = z.infer<typeof processFlowSchema>;
 
 // ─── Request 與 Task ─────────────────────────────────────────────────────
 
-/** returned：被 Return，等待發起人修改後重新送出；completed、withdrawn 是最終狀態。 */
-export const requestStatusSchema = z.enum(['running', 'returned', 'completed', 'withdrawn']);
+/** returned：被 Return，等待發起人修改後重新送出；completed、withdrawn、cancelled 是最終狀態。 */
+export const requestStatusSchema = z.enum([
+  'running',
+  'returned',
+  'completed',
+  'withdrawn',
+  'cancelled',
+]);
 export type RequestStatus = z.infer<typeof requestStatusSchema>;
 
-/** superseded：因為 Return、Withdraw 或 Escalation 而作廢，不再需要處理。 */
+/** superseded：因為 Return、Withdraw、Cancel、Reassign 或 Escalation 而作廢，不再需要處理。 */
 export const taskStatusSchema = z.enum(['open', 'completed', 'superseded']);
 export type TaskStatus = z.infer<typeof taskStatusSchema>;
 
@@ -357,6 +363,8 @@ export const requestTaskSchema = z.object({
   version: z.number().int().positive(),
   /** 建立時 Request 的第幾輪。 */
   round: z.number().int().positive(),
+  /** Reassign 建立的 Task：它取代的那個（已作廢的）Task；其他為 null。 */
+  replacesTaskId: z.string().nullable(),
   createdAt: z.iso.datetime(),
 });
 export type RequestTask = z.infer<typeof requestTaskSchema>;
@@ -369,11 +377,13 @@ export const requestEventTypeSchema = z.enum([
   'task.superseded',
   'task.reminded',
   'task.escalated',
+  'task.reassigned',
   'step.auto_approved',
   'step.branch_chosen',
   'step.email_sent',
   'request.resubmitted',
   'request.withdrawn',
+  'request.cancelled',
   'request.completed',
 ]);
 export type RequestEventType = z.infer<typeof requestEventTypeSchema>;
@@ -505,3 +515,36 @@ export const withdrawRequestSchema = z.object({
   comment: z.string().trim().max(2000).optional(),
 });
 export type WithdrawRequestInput = z.infer<typeof withdrawRequestSchema>;
+
+// ─── 例外處理：Cancel、Reassign、停用帳號 ────────────────────────────────
+
+/** `POST /api/requests/:id/cancel`：Administrator 強制終止尚未完成的 Request；原因必填，會顯示在時間軸。 */
+export const cancelRequestSchema = z.object({
+  comment: z.string().trim().min(1, 'Cancel 時必須填寫原因').max(2000),
+});
+export type CancelRequestInput = z.infer<typeof cancelRequestSchema>;
+
+/**
+ * `POST /api/tasks/:id/reassign`：把 open 的 Task 改派給另一位 Participant。
+ * 原 Task 作廢，為新的處理人建立新的 Task，回傳新的 Task。原因選填，會顯示在時間軸。
+ */
+export const reassignTaskSchema = z.object({
+  assigneeId: z.uuid(),
+  comment: z.string().trim().max(2000).optional(),
+});
+export type ReassignTaskInput = z.infer<typeof reassignTaskSchema>;
+
+/**
+ * `GET /api/tasks/pending-reassign`：「待 Reassign」清單，直接指派給已停用 Participant 的 open Task。
+ * 每一列和「我的待辦」相同。
+ */
+export const pendingReassignListSchema = myTaskListSchema;
+
+/** `GET /api/participants/:id/deactivation-impact`：停用前預覽影響範圍。 */
+export const deactivationImpactSchema = z.object({
+  /** 直接指派給此人的 open Task；停用後會進入「待 Reassign」清單。指派給 Role 的不算，其他成員仍可處理。 */
+  openTasks: myTaskListSchema,
+  /** 以此人為 Manager 的 Participant；停用後指派給他們 Manager 的步驟改派給 Fallback Role。 */
+  directReports: directorySchema,
+});
+export type DeactivationImpact = z.infer<typeof deactivationImpactSchema>;

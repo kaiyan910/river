@@ -38,3 +38,17 @@ export interface ResubmittedSignal {
 
 /** 發起人 Withdraw 後，API 提交 transaction 才送出；workflow 收到後直接結束。重複送出沒有影響。 */
 export const WITHDRAW_SIGNAL = 'withdraw';
+
+/** Administrator Cancel 後，API 提交 transaction 才送出；和 withdraw 一樣，workflow 收到後直接結束。重複送出沒有影響。 */
+export const CANCEL_SIGNAL = 'cancel';
+
+/**
+ * Administrator Reassign 後，API 提交 transaction 才送出：taskId 已經作廢，改由 newTaskId 接手。
+ * workflow 改等 newTaskId 的 taskCompleted，並通知新的處理人。重複送出沒有影響。
+ */
+export const REASSIGN_SIGNAL = 'reassign';
+
+export interface ReassignSignal {
+  taskId: string;
+  newTaskId: string;
+}

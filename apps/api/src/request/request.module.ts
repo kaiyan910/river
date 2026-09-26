@@ -8,5 +8,6 @@ import { TasksService } from './tasks.service.js';
 @Module({
   controllers: [RequestsController, TasksController],
   providers: [RequestReads, RequestsService, TasksService],
+  exports: [RequestReads],
 })
 export class RequestModule {}

@@ -7,21 +7,30 @@ import {
   ApiOkResponse,
 } from '@nestjs/swagger';
 import {
+  cancelRequestSchema,
   completeTaskSchema,
   type MyTask,
   myTaskListSchema,
+  myTaskSchema,
   myTasksQuerySchema,
+  pendingReassignListSchema,
   type RequestDetail,
   type RequestSummary,
+  reassignTaskSchema,
   requestDetailSchema,
   requestSummaryListSchema,
+  requestSummarySchema,
   resubmitRequestSchema,
   startRequestSchema,
   withdrawRequestSchema,
 } from '@river/contracts';
 import { createZodDto } from 'nestjs-zod';
 import type { ActiveParticipant } from '../auth/active-participant.js';
-import { CurrentParticipant, RequireParticipant } from '../auth/require-permission.js';
+import {
+  CurrentParticipant,
+  RequireParticipant,
+  RequirePermission,
+} from '../auth/require-permission.js';
 import { RequestsService } from './requests.service.js';
 import { TasksService } from './tasks.service.js';
 
@@ -33,10 +42,15 @@ class MyTasksQueryDto extends createZodDto(myTasksQuerySchema) {}
 class CompleteTaskDto extends createZodDto(completeTaskSchema) {}
 class ResubmitRequestDto extends createZodDto(resubmitRequestSchema) {}
 class WithdrawRequestDto extends createZodDto(withdrawRequestSchema) {}
+class CancelRequestDto extends createZodDto(cancelRequestSchema) {}
+class RequestSummaryDto extends createZodDto(requestSummarySchema) {}
+class ReassignTaskDto extends createZodDto(reassignTaskSchema) {}
+class MyTaskDto extends createZodDto(myTaskSchema) {}
+class PendingReassignListDto extends createZodDto(pendingReassignListSchema) {}
 
 const Id = () => Param('id', new ParseUUIDPipe());
 
-/** 入口網站的 Request：發起、「我的申請」、明細與時間軸、重新送出與 Withdraw。 */
+/** 入口網站的 Request：發起、「我的申請」、明細與時間軸、重新送出與 Withdraw；以及 Administrator 的 Cancel。 */
 @Controller('requests')
 export class RequestsController {
   constructor(private readonly requests: RequestsService) {}
@@ -69,6 +83,14 @@ export class RequestsController {
   @ApiOkResponse({ type: RequestSummaryListDto })
   mine(@CurrentParticipant() me: ActiveParticipant): Promise<RequestSummary[]> {
     return this.requests.mine(me);
+  }
+
+  /** 尚未結束（running 或 returned）的所有 Request，給 Administrator 處理例外狀況（Cancel、Reassign）。 */
+  @Get('active')
+  @RequirePermission('request.cancel', 'task.reassign')
+  @ApiOkResponse({ type: RequestSummaryListDto })
+  active(): Promise<RequestSummary[]> {
+    return this.requests.active();
   }
 
   /** 看得到的人（同 GET /requests）才能查看；其他人回 404。 */
@@ -108,9 +130,24 @@ export class RequestsController {
   ): Promise<RequestDetail> {
     return this.requests.withdraw(id, body, me);
   }
+
+  /** Administrator 強制終止尚未完成的 Request（原因必填）；open 的 Task 全部作廢。 */
+  @Post(':id/cancel')
+  @HttpCode(200)
+  @RequirePermission('request.cancel')
+  @ApiOkResponse({ type: RequestSummaryDto })
+  @ApiNotFoundResponse({ description: 'Request 不存在' })
+  @ApiConflictResponse({ description: 'Request 已經完成、撤回或 Cancel' })
+  cancel(
+    @Id() id: string,
+    @Body() body: CancelRequestDto,
+    @CurrentParticipant() me: ActiveParticipant,
+  ): Promise<RequestSummary> {
+    return this.requests.cancel(id, body, me);
+  }
 }
 
-/** 「我的待辦」與完成 Task。 */
+/** 「我的待辦」與完成 Task；以及 Administrator 的「待 Reassign」清單與 Reassign。 */
 @Controller('tasks')
 export class TasksController {
   constructor(private readonly tasks: TasksService) {}
@@ -123,6 +160,29 @@ export class TasksController {
     @CurrentParticipant() me: ActiveParticipant,
   ): Promise<MyTask[]> {
     return this.tasks.mine(me, query.status);
+  }
+
+  /** 「待 Reassign」清單：直接指派給已停用 Participant 的 open Task。 */
+  @Get('pending-reassign')
+  @RequirePermission('task.reassign')
+  @ApiOkResponse({ type: PendingReassignListDto })
+  pendingReassign(): Promise<MyTask[]> {
+    return this.tasks.pendingReassign();
+  }
+
+  /** 把 open 的 Task 改派給另一位 Participant：原 Task 作廢，回傳為新的處理人建立的 Task。 */
+  @Post(':id/reassign')
+  @HttpCode(200)
+  @RequirePermission('task.reassign')
+  @ApiOkResponse({ type: MyTaskDto })
+  @ApiNotFoundResponse({ description: 'Task 不存在' })
+  @ApiConflictResponse({ description: 'Task 已經處理完、作廢，或 Request 已經結束' })
+  reassign(
+    @Id() id: string,
+    @Body() body: ReassignTaskDto,
+    @CurrentParticipant() me: ActiveParticipant,
+  ): Promise<MyTask> {
+    return this.tasks.reassign(id, body, me);
   }
 
   @Post(':id/complete')

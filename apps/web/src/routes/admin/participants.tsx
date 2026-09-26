@@ -16,6 +16,7 @@ import {
   Send,
   UserPlus,
   Users,
+  UserX,
 } from 'lucide-react';
 import { type FormEvent, Fragment, useState } from 'react';
 import { Avatar, Chip, STATUS_LABELS, StatusBadge } from '@/components/people';
@@ -24,6 +25,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
+import { deactivationImpactQueryOptions, useDeactivateParticipant } from '@/lib/admin';
 import {
   participantsQueryOptions,
   rolesQueryOptions,
@@ -39,6 +41,7 @@ import {
   presetLabel,
   withPreset,
 } from '@/lib/permissions';
+import { requestNumber } from '@/lib/requests';
 import { cn } from '@/lib/utils';
 
 type StatusFilter = 'all' | ParticipantStatus;
@@ -580,6 +583,111 @@ function ParticipantDetail({
           ))}
         </div>
       </section>
+
+      {editable && !isSelf && <DeactivateSection participant={p} />}
     </div>
+  );
+}
+
+// ─── 停用 ─────────────────────────────────────────────────────────────────
+
+/** 停用前先預覽影響範圍，確認後才停用；停用後 session 立即失效，資料一律不刪除。 */
+function DeactivateSection({ participant: p }: { participant: Participant }) {
+  const [previewing, setPreviewing] = useState(false);
+  const impact = useQuery({ ...deactivationImpactQueryOptions(p.id), enabled: previewing });
+  const deactivate = useDeactivateParticipant();
+
+  return (
+    <section
+      aria-labelledby="deactivate-heading"
+      className="mt-8 grid gap-3 rounded-xl border border-destructive/30 p-4"
+    >
+      <h3
+        id="deactivate-heading"
+        className="flex items-center gap-1.5 font-semibold text-[1.05em] text-destructive"
+      >
+        <UserX size={16} aria-hidden /> 停用帳號
+      </h3>
+      <p className="text-[0.9em] text-muted-foreground">
+        離職時停用帳號：對方立即被登出且無法再登入，資料與歷程一律保留，他發起的 Request 照常進行。
+      </p>
+      {!previewing ? (
+        <div>
+          <Button size="sm" variant="outline" onClick={() => setPreviewing(true)}>
+            預覽影響範圍
+          </Button>
+        </div>
+      ) : impact.isPending ? (
+        <p className="text-muted-foreground">載入中…</p>
+      ) : impact.isError ? (
+        <p className="text-destructive">{impact.error.message}</p>
+      ) : (
+        <>
+          <div className="grid gap-1.5">
+            <h4 className="font-medium text-[0.92em]">
+              直接指派給 {p.name} 的 Task（{impact.data.openTasks.length}）
+            </h4>
+            {impact.data.openTasks.length ? (
+              <>
+                <ul className="grid gap-1 text-[0.92em]">
+                  {impact.data.openTasks.map((t) => (
+                    <li key={t.id} className="flex flex-wrap gap-x-1.5">
+                      <span className="font-mono text-muted-foreground">
+                        {requestNumber(t.request.number)}
+                      </span>
+                      <span>{t.request.title}</span>
+                      <span className="text-muted-foreground">· {t.nodeName}</span>
+                    </li>
+                  ))}
+                </ul>
+                <p className="text-[0.86em] text-muted-foreground">
+                  停用後這些 Task 會進入「待 Reassign」清單，並寄信通知 Administrator。
+                </p>
+              </>
+            ) : (
+              <p className="text-[0.9em] text-muted-foreground">沒有。</p>
+            )}
+          </div>
+          <div className="grid gap-1.5">
+            <h4 className="font-medium text-[0.92em]">
+              以 {p.name} 為 Manager 的人（{impact.data.directReports.length}）
+            </h4>
+            {impact.data.directReports.length ? (
+              <>
+                <div className="flex flex-wrap gap-1">
+                  {impact.data.directReports.map((r) => (
+                    <Chip key={r.id}>{r.name}</Chip>
+                  ))}
+                </div>
+                <p className="text-[0.86em] text-muted-foreground">
+                  停用後，指派給他們 Manager 的步驟會改派給 Fallback Role；建議先替他們設定新的
+                  Manager。
+                </p>
+              </>
+            ) : (
+              <p className="text-[0.9em] text-muted-foreground">沒有。</p>
+            )}
+          </div>
+          <div className="flex gap-2">
+            <Button
+              size="sm"
+              variant="destructive"
+              disabled={deactivate.isPending}
+              onClick={() =>
+                deactivate.mutate(p.id, {
+                  onSuccess: () => toast(`已停用 ${p.name}`),
+                  onError: (error) => toast(error.message, 'error'),
+                })
+              }
+            >
+              {deactivate.isPending ? '停用中…' : `確認停用 ${p.name}`}
+            </Button>
+            <Button size="sm" variant="ghost" onClick={() => setPreviewing(false)}>
+              返回
+            </Button>
+          </div>
+        </>
+      )}
+    </section>
   );
 }

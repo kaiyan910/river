@@ -4,7 +4,7 @@ import { and, eq, sql } from 'drizzle-orm';
 type Tx = Parameters<Parameters<Database['transaction']>[0]>[0];
 
 /**
- * Return 或 Withdraw 時，把 Request 所有 open 的 Task 改成 superseded，每一個都記一筆事件。
+ * Return、Withdraw 或 Cancel 時，把 Request 所有 open 的 Task 改成 superseded，每一個都記一筆事件。
  * 呼叫前要先鎖住 Request（和 createTask activity 同樣的順序），workflow 才不會在這之後又建立新的 Task。
  */
 export async function supersedeOpenTasks(tx: Tx, requestId: string): Promise<void> {

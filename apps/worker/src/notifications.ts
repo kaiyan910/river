@@ -2,6 +2,7 @@ import {
   authUsers,
   type Database,
   participants,
+  permissionGrants,
   processes,
   processVersions,
   requests,
@@ -9,7 +10,7 @@ import {
 } from '@river/db';
 import type { EmailRecipient } from '@river/dsl';
 import type { EmailSender, RequestNotificationProps } from '@river/email';
-import { renderRequestNotification } from '@river/email';
+import { renderPendingReassignNotification, renderRequestNotification } from '@river/email';
 import { and, eq, inArray, isNull } from 'drizzle-orm';
 
 /** 寄信需要的依賴；appUrl 是瀏覽器看到的網址，信件裡的連結以它為準。 */
@@ -66,6 +67,19 @@ export async function roleMemberEmails(db: Database, roleId: string): Promise<st
   return rows.map((r) => r.email);
 }
 
+/** 持有 task.reassign、沒有停用的 Administrator 的 email；「待 Reassign」清單有新項目時通知他們。 */
+export async function reassignerEmails(db: Database): Promise<string[]> {
+  const rows = await db
+    .select({ email: authUsers.email })
+    .from(permissionGrants)
+    .innerJoin(participants, eq(participants.id, permissionGrants.participantId))
+    .innerJoin(authUsers, eq(authUsers.id, participants.userId))
+    .where(
+      and(eq(permissionGrants.permission, 'task.reassign'), isNull(participants.deactivatedAt)),
+    );
+  return rows.map((r) => r.email);
+}
+
 /** Email 節點的收件人；發起人的 Manager 沒有設定或已停用時沒有收件人（activeEmails 會濾掉停用的人）。 */
 export async function emailRecipients(
   db: Database,
@@ -94,6 +108,10 @@ export function taskUrl(appUrl: string, taskId: string): string {
   return new URL(`/tasks?id=${encodeURIComponent(taskId)}`, appUrl).toString();
 }
 
+export function pendingReassignUrl(appUrl: string): string {
+  return new URL('/admin/reassign', appUrl).toString();
+}
+
 export function requestUrl(appUrl: string, requestId: string): string {
   return new URL(`/requests?id=${encodeURIComponent(requestId)}`, appUrl).toString();
 }
@@ -108,5 +126,20 @@ export async function sendToEach(
   for (const address of new Set(to))
     await emailSender.send(
       await renderRequestNotification({ ...props, to: address, notification }),
+    );
+}
+
+/** 「待 Reassign」清單有新項目：寄給每一位持有 task.reassign 的 Administrator。 */
+export async function sendPendingReassign(
+  db: Database,
+  { emailSender, appUrl }: NotificationDeps,
+  participantName: string,
+  tasks: { requestTitle: string; processName: string }[],
+): Promise<void> {
+  if (tasks.length === 0) return;
+  const url = pendingReassignUrl(appUrl);
+  for (const address of new Set(await reassignerEmails(db)))
+    await emailSender.send(
+      await renderPendingReassignNotification({ to: address, url, participantName, tasks }),
     );
 }

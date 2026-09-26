@@ -17,8 +17,8 @@ export interface NavItem {
   to: string;
   label: string;
   icon: LucideIcon;
-  /** 持有這個 Permission 才顯示；API 端仍會各自檢查。 */
-  requires?: Permission;
+  /** 持有這個 Permission（陣列時持有其中任一個）才顯示；API 端仍會各自檢查。 */
+  requires?: Permission | readonly Permission[];
 }
 
 export const HOME: NavItem = { to: '/', label: '首頁', icon: House };
@@ -49,6 +49,13 @@ export const ROLES: NavItem = {
   icon: Shield,
   requires: 'role.manage',
 };
+/** 例外處理：「待 Reassign」清單、進行中的 Request 的 Reassign 與 Cancel。 */
+export const REASSIGN: NavItem = {
+  to: '/admin/reassign',
+  label: '待 Reassign',
+  icon: Repeat,
+  requires: ['task.reassign', 'request.cancel'],
+};
 
 /** icon rail 的分組；組與組之間以分隔線隔開。 */
 export const NAV_GROUPS: NavItem[][] = [
@@ -57,7 +64,7 @@ export const NAV_GROUPS: NavItem[][] = [
   [
     PARTICIPANTS,
     ROLES,
-    { to: '/admin/reassign', label: '待 Reassign', icon: Repeat, requires: 'task.reassign' },
+    REASSIGN,
     { to: '/admin/requests', label: '全部 Request', icon: List, requires: 'request.view_all' },
   ],
 ];
@@ -69,7 +76,10 @@ export function visibleNavGroups(permissions: readonly Permission[]): NavItem[][
 }
 
 export function canAccess(item: NavItem, permissions: readonly Permission[]): boolean {
-  return !item.requires || permissions.includes(item.requires);
+  if (!item.requires) return true;
+  const required: readonly Permission[] =
+    typeof item.requires === 'string' ? [item.requires] : item.requires;
+  return required.some((p) => permissions.includes(p));
 }
 
 const IMPLEMENTED: NavItem[] = [
@@ -80,6 +90,7 @@ const IMPLEMENTED: NavItem[] = [
   VISIBLE_REQUESTS,
   PARTICIPANTS,
   ROLES,
+  REASSIGN,
   PROCESSES,
 ];
 

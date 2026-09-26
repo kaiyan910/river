@@ -16,9 +16,11 @@ import {
   PARTICIPANTS,
   PLACEHOLDER_ITEMS,
   PROCESSES,
+  REASSIGN,
   ROLES,
 } from '@/navigation';
 import { ParticipantsPage } from '@/routes/admin/participants';
+import { ReassignPage } from '@/routes/admin/reassign';
 import { RolesPage } from '@/routes/admin/roles';
 import { AppShell } from '@/routes/app-shell';
 import { ProcessesPage } from '@/routes/designer/processes';
@@ -134,6 +136,26 @@ const rolesRoute = createRoute({
   },
 });
 
+const reassignRoute = createRoute({
+  getParentRoute: () => authenticatedRoute,
+  path: '/admin/reassign',
+  validateSearch: selectionSearch,
+  component: function Reassign() {
+    const { me } = authenticatedRoute.useRouteContext();
+    const { id } = reassignRoute.useSearch();
+    const navigate = reassignRoute.useNavigate();
+    return (
+      <Guarded item={REASSIGN}>
+        <ReassignPage
+          me={me}
+          selected={id}
+          onSelect={(next) => navigate({ search: { id: next } })}
+        />
+      </Guarded>
+    );
+  },
+});
+
 const processesRoute = createRoute({
   getParentRoute: () => authenticatedRoute,
   path: '/designer/processes',
@@ -229,6 +251,7 @@ const routeTree = rootRoute.addChildren([
     homeRoute,
     participantsRoute,
     rolesRoute,
+    reassignRoute,
     processesRoute,
     startRoute,
     tasksRoute,

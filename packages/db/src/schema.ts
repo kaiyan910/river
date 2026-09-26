@@ -180,8 +180,14 @@ export const processVersions = pgTable(
 
 // ─── Request 與 Task ──────────────────────────────────────────────────────
 
-/** returned：被 Return，等待發起人重新送出；completed、withdrawn 是最終狀態。 */
-export const REQUEST_STATUSES = ['running', 'returned', 'completed', 'withdrawn'] as const;
+/** returned：被 Return，等待發起人重新送出；completed、withdrawn、cancelled 是最終狀態。 */
+export const REQUEST_STATUSES = [
+  'running',
+  'returned',
+  'completed',
+  'withdrawn',
+  'cancelled',
+] as const;
 export type RequestStatus = (typeof REQUEST_STATUSES)[number];
 
 /** 一筆 Request 對應一個 Temporal workflow，workflow ID 等於 Request ID。發起時鎖定 Process Version。 */
@@ -206,7 +212,7 @@ export const requests = pgTable(
   (t) => [index().on(t.initiatorId)],
 );
 
-/** superseded：因為 Return、Withdraw 或 Escalation 而作廢，不再需要處理。 */
+/** superseded：因為 Return、Withdraw、Cancel、Reassign 或 Escalation 而作廢，不再需要處理。 */
 export const TASK_STATUSES = ['open', 'completed', 'superseded'] as const;
 export type TaskStatus = (typeof TASK_STATUSES)[number];
 /** 審批 Task 的結果是 approved 或 returned；填表 Task 送出後是 submitted。 */
@@ -240,6 +246,11 @@ export const tasks = pgTable(
     comment: text('comment'),
     completedBy: uuid('completed_by').references(() => participants.id),
     completedAt: timestamp('completed_at', { withTimezone: true }),
+    /**
+     * Reassign 或 Escalation 建立的 Task 記下它取代的那個（已作廢的）Task；一路往回追就是這一步的改派歷程。
+     * 流程走到這一步時建立的 Task 為 null。
+     */
+    replacesTaskId: uuid('replaces_task_id').references((): AnyPgColumn => tasks.id),
     version: integer('version').notNull().default(1),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
@@ -259,11 +270,13 @@ export const REQUEST_EVENT_TYPES = [
   'task.superseded',
   'task.reminded',
   'task.escalated',
+  'task.reassigned',
   'step.auto_approved',
   'step.branch_chosen',
   'step.email_sent',
   'request.resubmitted',
   'request.withdrawn',
+  'request.cancelled',
   'request.completed',
 ] as const;
 export type RequestEventType = (typeof REQUEST_EVENT_TYPES)[number];

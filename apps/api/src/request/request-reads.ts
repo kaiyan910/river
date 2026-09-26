@@ -9,6 +9,7 @@ import type {
 } from '@river/contracts';
 import {
   type Database,
+  participants,
   processes,
   processVersions,
   requestData,
@@ -17,7 +18,7 @@ import {
   tasks,
 } from '@river/db';
 import { formIdOf, type TaskAssignee } from '@river/dsl';
-import { and, asc, desc, eq, inArray, max, type SQL } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, isNotNull, max, type SQL } from 'drizzle-orm';
 import { type Viewer, visibleTo } from '../auth/data-access.js';
 import {
   assigneeRef,
@@ -53,16 +54,56 @@ export class RequestReads {
    * open：指派給我、或指派給我所屬 Role 的 Task；Role 的 Task 被任一成員完成後就從所有人的清單消失。
    * completed：我實際處理過的 Task。
    */
-  async myTasks(participantId: string, status: MyTasksStatus): Promise<MyTask[]> {
-    const rows = await this.db
-      .select()
-      .from(tasks)
-      .where(
-        status === 'open'
-          ? and(assignedTo(this.db, participantId), eq(tasks.status, 'open'))
-          : and(eq(tasks.completedBy, participantId), eq(tasks.status, 'completed')),
-      )
-      .orderBy(status === 'open' ? desc(tasks.createdAt) : desc(tasks.completedAt));
+  myTasks(participantId: string, status: MyTasksStatus): Promise<MyTask[]> {
+    return status === 'open'
+      ? this.tasksWhere(
+          and(assignedTo(this.db, participantId), eq(tasks.status, 'open')),
+          desc(tasks.createdAt),
+        )
+      : this.tasksWhere(
+          and(eq(tasks.completedBy, participantId), eq(tasks.status, 'completed')),
+          desc(tasks.completedAt),
+        );
+  }
+
+  /** 直接指派給這位 Participant 的 open Task（不含指派給他所屬 Role 的）；停用前預覽影響範圍用。 */
+  directOpenTasks(participantId: string): Promise<MyTask[]> {
+    return this.tasksWhere(
+      and(eq(tasks.assigneeId, participantId), eq(tasks.status, 'open')),
+      asc(tasks.createdAt),
+    );
+  }
+
+  /** 「待 Reassign」清單：直接指派給已停用 Participant 的 open Task，先進來的在前。 */
+  pendingReassign(): Promise<MyTask[]> {
+    const deactivated = this.db
+      .select({ id: participants.id })
+      .from(participants)
+      .where(isNotNull(participants.deactivatedAt));
+    return this.tasksWhere(
+      and(inArray(tasks.assigneeId, deactivated), eq(tasks.status, 'open')),
+      asc(tasks.createdAt),
+    );
+  }
+
+  async task(taskId: string): Promise<MyTask | undefined> {
+    const [task] = await this.tasksWhere(eq(tasks.id, taskId), asc(tasks.createdAt));
+    return task;
+  }
+
+  /** 尚未結束（running 或 returned）的所有 Request，新的在前；Cancel 與 Reassign 用。 */
+  active(): Promise<RequestSummary[]> {
+    return this.summaries(inArray(requests.status, ['running', 'returned']));
+  }
+
+  async summary(requestId: string): Promise<RequestSummary | undefined> {
+    const [summary] = await this.summaries(eq(requests.id, requestId));
+    return summary;
+  }
+
+  private async tasksWhere(where: SQL | undefined, order: SQL): Promise<MyTask[]> {
+    const rows = await this.db.select().from(tasks).where(where).orderBy(order);
+    if (rows.length === 0) return [];
     const summaries = await this.summaries(
       inArray(
         requests.id,
@@ -287,6 +328,7 @@ function toTask(t: TaskRow, names: Names): RequestTask {
     completedAt: t.completedAt ? iso(t.completedAt) : null,
     version: t.version,
     round: t.round,
+    replacesTaskId: t.replacesTaskId,
     createdAt: iso(t.createdAt),
   };
 }
