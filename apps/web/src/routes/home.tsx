@@ -2,10 +2,15 @@ import { useQuery } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
 import { Inbox, MousePointerClick, Plus, Search } from 'lucide-react';
 import { useState } from 'react';
-import { Avatar } from '@/components/people';
+import { InitiatorAvatar } from '@/components/people';
 import { buttonVariants } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { myRequestsQueryOptions, myTasksQueryOptions, requestNumber } from '@/lib/requests';
+import {
+  initiatorLabel,
+  myRequestsQueryOptions,
+  myTasksQueryOptions,
+  requestNumber,
+} from '@/lib/requests';
 import { timeAgo } from '@/lib/time';
 import { cn } from '@/lib/utils';
 import { START_REQUEST } from '@/navigation';
@@ -86,7 +91,7 @@ export function HomePage() {
                     search={{ id: t.id }}
                     className="flex gap-2.5 border-b px-3 py-2.5 hover:bg-muted/60"
                   >
-                    <Avatar id={t.request.initiator.id} name={t.request.initiator.name} size={30} />
+                    <InitiatorAvatar initiator={t.request.initiator} size={30} />
                     <span className="grid min-w-0 flex-1 gap-0.5">
                       <span className="flex items-baseline justify-between gap-2">
                         <span className="truncate font-medium">{t.request.title}</span>
@@ -95,7 +100,7 @@ export function HomePage() {
                         </span>
                       </span>
                       <span className="truncate text-[0.86em] text-muted-foreground">
-                        {t.request.initiator.name} · {t.request.process.name} · {t.nodeName}
+                        {initiatorLabel(t.request)} · {t.request.process.name} · {t.nodeName}
                       </span>
                     </span>
                   </Link>

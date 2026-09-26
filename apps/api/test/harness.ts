@@ -32,7 +32,14 @@ export class ApiClient {
     private readonly baseUrl: string,
     /** 登入後拿到的 session cookie（原始 Set-Cookie 內容）；匿名時為 undefined。 */
     readonly cookie?: string,
+    /** Service Account 的 API key；外部 API 以 `Authorization: Bearer <key>` 驗證。 */
+    private readonly apiKey?: string,
   ) {}
+
+  /** 以 Service Account 的 API key 呼叫的 client（不帶 session cookie）。 */
+  withApiKey(apiKey: string): ApiClient {
+    return new ApiClient(this.baseUrl, undefined, apiKey);
+  }
 
   get(path: string): Promise<Response> {
     return this.request('GET', path);
@@ -57,6 +64,7 @@ export class ApiClient {
   private request(method: string, path: string, body?: unknown): Promise<Response> {
     const headers: Record<string, string> = { origin: ORIGIN };
     if (this.cookie) headers.cookie = this.cookie.split(';')[0] ?? '';
+    if (this.apiKey) headers.authorization = `Bearer ${this.apiKey}`;
     if (body !== undefined) headers['content-type'] = 'application/json';
     return fetch(new URL(path, this.baseUrl), {
       method,

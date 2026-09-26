@@ -8,6 +8,7 @@ export const PERMISSIONS = [
   'request.cancel',
   'task.reassign',
   'request.view_all',
+  'service_account.manage',
 ] as const;
 
 export type Permission = (typeof PERMISSIONS)[number];
@@ -21,5 +22,6 @@ export const PERMISSION_PRESETS = {
     'request.cancel',
     'task.reassign',
     'request.view_all',
+    'service_account.manage',
   ],
 } as const satisfies Record<string, readonly Permission[]>;

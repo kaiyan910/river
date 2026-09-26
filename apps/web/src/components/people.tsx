@@ -1,5 +1,5 @@
-import type { ParticipantStatus } from '@river/contracts';
-import { Search } from 'lucide-react';
+import type { Initiator, ParticipantStatus } from '@river/contracts';
+import { Bot, Search } from 'lucide-react';
 import { useId, useState } from 'react';
 import { Input } from '@/components/ui/input';
 import { cn } from '@/lib/utils';
@@ -28,6 +28,21 @@ export function Avatar({ id, name, size = 28 }: { id: string; name: string; size
       }}
     >
       {name.slice(0, 1)}
+    </span>
+  );
+}
+
+/** Request 發起人的頭像；Service Account 用方形的機器人圖示，和 Participant 區分。 */
+export function InitiatorAvatar({ initiator, size = 28 }: { initiator: Initiator; size?: number }) {
+  if (initiator.type === 'participant')
+    return <Avatar id={initiator.id} name={initiator.name} size={size} />;
+  return (
+    <span
+      aria-hidden
+      className="grid shrink-0 place-items-center rounded-md bg-muted text-muted-foreground"
+      style={{ width: size, height: size }}
+    >
+      <Bot size={size * 0.6} />
     </span>
   );
 }

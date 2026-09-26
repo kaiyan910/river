@@ -28,7 +28,8 @@ const refOf = (row: AttachmentRow): AttachmentRef => ({
 
 /** 送出表單的人與這一步所屬的 Request（發起時還沒有）。 */
 export interface SubmissionContext {
-  submitterId: string;
+  /** 送出的 Participant；Service Account 透過外部 API 發起時為 null，不能引用任何還沒綁定的附件。 */
+  submitterId: string | null;
   requestId?: string;
 }
 
@@ -129,7 +130,7 @@ export class AttachmentsService {
       rows
         .filter((r) =>
           r.requestId === null
-            ? r.uploadedBy === ctx.submitterId
+            ? ctx.submitterId !== null && r.uploadedBy === ctx.submitterId
             : ctx.requestId !== undefined && r.requestId === ctx.requestId,
         )
         .map((r) => [r.id, r]),

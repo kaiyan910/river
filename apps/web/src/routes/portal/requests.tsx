@@ -10,6 +10,7 @@ import { Button, buttonVariants } from '@/components/ui/button';
 import { meQueryOptions } from '@/lib/me';
 import {
   formRejection,
+  initiatorLabel,
   isWithdrawable,
   myRequestsQueryOptions,
   requestNumber,
@@ -86,7 +87,7 @@ export function RequestsPage({
         r.title.toLowerCase().includes(q) ||
         requestNumber(r.number).toLowerCase().includes(q) ||
         (scope === 'visible' &&
-          (r.initiator.name.toLowerCase().includes(q) ||
+          (initiatorLabel(r).toLowerCase().includes(q) ||
             r.process.name.toLowerCase().includes(q)))),
   );
   const count = (t: Tab) => all.filter((r) => inTab(t, r.status)).length;
@@ -135,7 +136,7 @@ export function RequestsPage({
                 </span>
                 {scope === 'visible' && (
                   <span className="truncate text-[0.82em] text-muted-foreground">
-                    {r.process.name} · {r.initiator.name}
+                    {r.process.name} · {initiatorLabel(r)}
                   </span>
                 )}
                 <span className="flex items-center justify-between gap-2">

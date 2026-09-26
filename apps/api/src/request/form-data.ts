@@ -58,7 +58,7 @@ export async function validateStepData(
 export async function saveStepData(
   tx: Pick<Database, 'insert' | 'update'>,
   submission: StepSubmission | null,
-  step: { requestId: string; nodeId: string; submittedBy: string; round: number },
+  step: { requestId: string; nodeId: string; submittedBy: string | null; round: number },
 ): Promise<void> {
   if (!submission) return;
   await tx

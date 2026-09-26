@@ -10,6 +10,6 @@ import { TasksService } from './tasks.service.js';
   imports: [AttachmentModule],
   controllers: [RequestsController, TasksController],
   providers: [RequestReads, RequestsService, TasksService],
-  exports: [RequestReads],
+  exports: [RequestReads, RequestsService],
 })
 export class RequestModule {}

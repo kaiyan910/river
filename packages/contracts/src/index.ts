@@ -376,6 +376,12 @@ const pendingTaskSchema = z.object({
   assignee: assigneeRefSchema,
 });
 
+/** Request 的發起人：Participant，或沒有代表任何人發起的 Service Account。 */
+export const initiatorSchema = actorSchema.extend({
+  type: z.enum(['participant', 'service_account']),
+});
+export type Initiator = z.infer<typeof initiatorSchema>;
+
 /** `GET /api/requests/mine`、`GET /api/requests` 的一列。 */
 export const requestSummarySchema = z.object({
   id: z.string(),
@@ -384,7 +390,13 @@ export const requestSummarySchema = z.object({
   title: z.string(),
   status: requestStatusSchema,
   process: requestProcessSchema,
-  initiator: actorSchema,
+  /**
+   * 發起人：通常是 Participant；Service Account 透過外部 API 發起、沒有帶 on_behalf_of 時是那個 Service Account
+   * （id、name 是 Service Account 的）。
+   */
+  initiator: initiatorSchema,
+  /** 透過外部 API 發起時是發起的 Service Account（帶 on_behalf_of 時發起人仍是那位 Participant）；在平台上發起的為 null。 */
+  serviceAccount: actorSchema.nullable(),
   /** running 卻沒有 open Task 時，代表 workflow 正在往下一步走（畫面顯示「處理中」）。 */
   openTasks: z.array(pendingTaskSchema),
   /** status 是 returned 時：誰在哪一步 Return、意見是什麼；其他狀態為 null。 */
@@ -499,6 +511,7 @@ export const requestDataSectionSchema = z.object({
   data: formDataSchema,
   /** 這一步的人員選擇器（包括明細表裡的）選到的人，唯讀顯示姓名用。 */
   people: z.array(actorSchema),
+  /** 填寫的人；Service Account 沒有代表任何人發起時，開始表單是那個 Service Account 送出的。 */
   submittedBy: actorSchema,
   submittedAt: z.iso.datetime(),
 });
@@ -535,6 +548,7 @@ export const myTaskSchema = requestTaskSchema.extend({
     status: true,
     process: true,
     initiator: true,
+    serviceAccount: true,
   }),
 });
 export type MyTask = z.infer<typeof myTaskSchema>;
@@ -612,3 +626,90 @@ export const deactivationImpactSchema = z.object({
 });
 export type DeactivationImpact = z.infer<typeof deactivationImpactSchema>;
 export * from './attachments.js';
+
+// ─── Service Account 與外部 API ─────────────────────────────────────────
+
+/** `GET /api/service-accounts` 的一列。API key 只顯示前綴（辨識用），明文只在發放、輪替時回傳一次。 */
+export const serviceAccountSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  /** 可以發起的 Process；不在清單上的 Process 一律不能透過外部 API 發起。 */
+  processes: z.array(z.object({ id: z.string(), name: z.string() })),
+  apiKey: z.object({
+    /** key 的開頭幾個字元，例如 `river_sk_Ab3x`；不足以拿來呼叫 API。 */
+    prefix: z.string(),
+    issuedAt: z.iso.datetime(),
+  }),
+  createdAt: z.iso.datetime(),
+});
+export type ServiceAccount = z.infer<typeof serviceAccountSchema>;
+export const serviceAccountListSchema = z.array(serviceAccountSchema);
+
+/** `POST /api/service-accounts`：建立 Service Account 並發放第一把 API key。 */
+export const createServiceAccountSchema = z.object({
+  name: z.string().trim().min(1).max(100),
+  processIds: z.array(z.uuid()).default([]),
+});
+export type CreateServiceAccountInput = z.input<typeof createServiceAccountSchema>;
+
+/** `PUT /api/service-accounts/:id/processes`：以整份清單取代可以發起的 Process。 */
+export const setServiceAccountProcessesSchema = z.object({ processIds: z.array(z.uuid()) });
+export type SetServiceAccountProcessesInput = z.infer<typeof setServiceAccountProcessesSchema>;
+
+/**
+ * 建立 Service Account 或輪替 API key（`POST /api/service-accounts/:id/api-key`）的回應。
+ * apiKey 是明文，只在這裡出現一次；平台只存 hash，之後無法再查詢。輪替後舊的 key 立即失效。
+ */
+export const issuedApiKeySchema = z.object({
+  serviceAccount: serviceAccountSchema,
+  apiKey: z.string(),
+});
+export type IssuedApiKey = z.infer<typeof issuedApiKeySchema>;
+
+/** `GET /api/service-accounts/process-options`：可以授權給 Service Account 的 Process（已經發佈過的）。 */
+export const serviceAccountProcessOptionsSchema = z.array(
+  z.object({ id: z.string(), name: z.string() }),
+);
+export type ServiceAccountProcessOption = z.infer<
+  typeof serviceAccountProcessOptionsSchema
+>[number];
+
+/** `POST /api/external/requests`：外部系統以 Service Account 的 API key 發起 Request。 */
+export const externalStartRequestSchema = z.object({
+  processId: z
+    .uuid()
+    .describe('要發起的 Process；必須是這個 Service Account 被授權發起的 Process。'),
+  title: z.string().trim().min(1).max(200).describe('Request 的標題。'),
+  data: formDataSchema
+    .optional()
+    .describe('開始表單的資料，鍵是欄位代碼；依 Process 目前版本的開始表單驗證。'),
+  on_behalf_of: z
+    .email()
+    .transform((v) => v.toLowerCase())
+    .optional()
+    .describe(
+      '代表這位 Participant（以 email 指定）發起：他就是發起人，指派給 Manager 的步驟交給他的 Manager。' +
+        '沒有帶時發起人是 Service Account 本身，指派給 Manager 的步驟改派給 Fallback Role。',
+    ),
+});
+export type ExternalStartRequestInput = z.input<typeof externalStartRequestSchema>;
+export type ExternalStartRequestCommand = z.output<typeof externalStartRequestSchema>;
+
+/** 外部 API 回傳的 Request 狀態；不含 Form 資料與處理人。 */
+export const externalRequestSchema = z.object({
+  id: z.string(),
+  /** 給人看的流水號，畫面顯示成 R-000042。 */
+  number: z.number().int().positive(),
+  title: z.string(),
+  status: requestStatusSchema.describe(
+    'running：進行中；returned：被 Return，等待發起人修改後重新送出；completed：完成；withdrawn：發起人撤回；cancelled：被 Administrator Cancel。',
+  ),
+  process: requestProcessSchema,
+  initiator: initiatorSchema,
+  /** 目前在等的步驟名稱；running 卻是空的代表流程正在往下一步走。 */
+  pendingSteps: z.array(z.string()),
+  createdAt: z.iso.datetime(),
+  updatedAt: z.iso.datetime(),
+});
+export type ExternalRequest = z.infer<typeof externalRequestSchema>;
+export const externalRequestListSchema = z.array(externalRequestSchema);

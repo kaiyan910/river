@@ -3,7 +3,7 @@ import { useQuery } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
 import { Ban, ExternalLink, Repeat, UserX } from 'lucide-react';
 import { type FormEvent, useState } from 'react';
-import { Avatar, Chip, PersonPicker } from '@/components/people';
+import { Avatar, Chip, InitiatorAvatar, PersonPicker } from '@/components/people';
 import { toast } from '@/components/toast';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -15,7 +15,7 @@ import {
   useReassignTask,
 } from '@/lib/admin';
 import { directoryQueryOptions } from '@/lib/org';
-import { assigneeLabel, requestNumber } from '@/lib/requests';
+import { assigneeLabel, initiatorLabel, requestNumber } from '@/lib/requests';
 import { formatTime, timeAgo } from '@/lib/time';
 import { cn } from '@/lib/utils';
 import {
@@ -127,7 +127,7 @@ export function ReassignPage({
             requests.map((r) => (
               <li key={r.id}>
                 <ListButton selected={selected === r.id} onClick={() => onSelect(r.id)}>
-                  <Avatar id={r.initiator.id} name={r.initiator.name} size={30} />
+                  <InitiatorAvatar initiator={r.initiator} size={30} />
                   <span className="grid min-w-0 flex-1 gap-0.5">
                     <span className="flex items-baseline justify-between gap-2">
                       <span className="truncate font-medium">{r.title}</span>
@@ -136,7 +136,7 @@ export function ReassignPage({
                       </span>
                     </span>
                     <span className="truncate text-[0.86em] text-muted-foreground">
-                      {r.initiator.name} · {r.process.name}
+                      {initiatorLabel(r)} · {r.process.name}
                     </span>
                     <RequestStatus request={r} withStep />
                   </span>
@@ -214,8 +214,8 @@ function RequestTitle({
       </div>
       <h2 className="font-semibold text-[1.45em]">{request.title}</h2>
       <span className="inline-flex items-center gap-1.5 text-[0.9em] text-muted-foreground">
-        <Avatar id={request.initiator.id} name={request.initiator.name} size={20} />
-        {request.initiator.name} 發起
+        <InitiatorAvatar initiator={request.initiator} size={20} />
+        {initiatorLabel(request)} 發起
         {me.permissions.includes('request.view_all') && (
           <Link
             to="/requests/visible"

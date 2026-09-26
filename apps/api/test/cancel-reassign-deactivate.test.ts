@@ -498,7 +498,11 @@ describe('Cancel、Reassign 與停用帳號', () => {
         () => detail(request.id, reviewer),
         (d) => d.status === 'completed',
       );
-      expect(done.initiator).toEqual({ id: leaving.participantId, name: '周杰' });
+      expect(done.initiator).toEqual({
+        type: 'participant',
+        id: leaving.participantId,
+        name: '周杰',
+      });
     });
 
     it('直接指派給已停用 Participant 的 open Task 出現在「待 Reassign」清單，並寄信通知 Administrator', async () => {

@@ -4,6 +4,7 @@ import {
   FileText,
   House,
   Inbox,
+  KeyRound,
   List,
   type LucideIcon,
   Plus,
@@ -57,6 +58,14 @@ export const REASSIGN: NavItem = {
   requires: ['task.reassign', 'request.cancel'],
 };
 
+/** 外部系統透過外部 API 發起 Request 用的 Service Account 與 API key。 */
+export const SERVICE_ACCOUNTS: NavItem = {
+  to: '/admin/service-accounts',
+  label: 'Service Account',
+  icon: KeyRound,
+  requires: 'service_account.manage',
+};
+
 /** icon rail 的分組；組與組之間以分隔線隔開。 */
 export const NAV_GROUPS: NavItem[][] = [
   [HOME, START_REQUEST, MY_TASKS, MY_REQUESTS, VISIBLE_REQUESTS],
@@ -65,6 +74,7 @@ export const NAV_GROUPS: NavItem[][] = [
     PARTICIPANTS,
     ROLES,
     REASSIGN,
+    SERVICE_ACCOUNTS,
     { to: '/admin/requests', label: '全部 Request', icon: List, requires: 'request.view_all' },
   ],
 ];
@@ -91,6 +101,7 @@ const IMPLEMENTED: NavItem[] = [
   PARTICIPANTS,
   ROLES,
   REASSIGN,
+  SERVICE_ACCOUNTS,
   PROCESSES,
 ];
 

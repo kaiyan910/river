@@ -26,6 +26,10 @@ export const PERMISSION_LABELS: Record<Permission, { label: string; description:
     label: '查看全部 Request',
     description: '查看平台上每一筆 Request 的內容與歷程。',
   },
+  'service_account.manage': {
+    label: '管理 Service Account',
+    description: '建立 Service Account、設定它可以發起的 Process，發放與輪替 API key。',
+  },
   'credential.manage': {
     label: '管理 Credential',
     description: '建立與輪替外部系統的憑證。不在任何預設組合中，必須單獨授予。',

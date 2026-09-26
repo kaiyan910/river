@@ -1,5 +1,6 @@
 import { Inject, Injectable } from '@nestjs/common';
 import type {
+  Initiator,
   MyTask,
   MyTasksStatus,
   RequestDetail,
@@ -15,6 +16,7 @@ import {
   requestData,
   requestEvents,
   requests,
+  serviceAccounts,
   tasks,
 } from '@river/db';
 import { formIdOf, type TaskAssignee } from '@river/dsl';
@@ -44,6 +46,11 @@ export class RequestReads {
   /** 某位 Participant 發起的 Request，新的在前。 */
   mine(initiatorId: string): Promise<RequestSummary[]> {
     return this.summaries(eq(requests.initiatorId, initiatorId));
+  }
+
+  /** 某個 Service Account 透過外部 API 發起的 Request（不論有沒有帶 on_behalf_of），新的在前。 */
+  startedBy(serviceAccountId: string): Promise<RequestSummary[]> {
+    return this.summaries(eq(requests.serviceAccountId, serviceAccountId));
   }
 
   /** 看得到的所有 Request（見 visibleTo），新的在前。 */
@@ -116,8 +123,13 @@ export class RequestReads {
     return rows.flatMap((t) => {
       const r = byId.get(t.requestId);
       if (!r) return [];
-      const { id, number, title, status, process, initiator } = r;
-      return [{ ...toTask(t, names), request: { id, number, title, status, process, initiator } }];
+      const { id, number, title, status, process, initiator, serviceAccount } = r;
+      return [
+        {
+          ...toTask(t, names),
+          request: { id, number, title, status, process, initiator, serviceAccount },
+        },
+      ];
     });
   }
 
@@ -164,7 +176,7 @@ export class RequestReads {
       ...picked.flat(),
       ...taskRows.flatMap(taskPeople),
       ...eventRows.flatMap((e) => (e.actorId ? [e.actorId] : [])),
-      ...dataRows.map((d) => d.submittedBy),
+      ...dataRows.flatMap((d) => (d.submittedBy ? [d.submittedBy] : [])),
       ...assigneesOf(dsl),
     ]);
     const nodeNames = new Map(dsl.nodes.map((n) => [n.id, n.name]));
@@ -180,13 +192,19 @@ export class RequestReads {
           }
         : null;
     };
+    // Service Account 沒有代表任何人發起時，發起與開始表單都算在它身上。
+    const initiator = { id: summary.initiator.id, name: summary.initiator.name };
     const events: RequestEvent[] = eventRows.map((e) => {
       const task = e.taskId ? taskById.get(e.taskId) : undefined;
       return {
         id: e.id,
         type: e.type,
         at: iso(e.at),
-        actor: e.actorId ? actor(names, e.actorId) : null,
+        actor: e.actorId
+          ? actor(names, e.actorId)
+          : e.type === 'request.started'
+            ? initiator
+            : null,
         task: task
           ? {
               id: task.id,
@@ -221,7 +239,7 @@ export class RequestReads {
         formId: d.formId,
         data: d.data,
         people: (picked[i] ?? []).map((id) => actor(names, id)),
-        submittedBy: actor(names, d.submittedBy),
+        submittedBy: d.submittedBy ? actor(names, d.submittedBy) : initiator,
         submittedAt: iso(d.submittedAt),
       })),
       tasks: taskRows.map((t) => toTask(t, names)),
@@ -242,6 +260,8 @@ export class RequestReads {
         title: requests.title,
         status: requests.status,
         initiatorId: requests.initiatorId,
+        serviceAccountId: serviceAccounts.id,
+        serviceAccountName: serviceAccounts.name,
         createdAt: requests.createdAt,
         processId: processes.id,
         processName: processes.name,
@@ -251,6 +271,7 @@ export class RequestReads {
       .from(requests)
       .innerJoin(processVersions, eq(processVersions.id, requests.processVersionId))
       .innerJoin(processes, eq(processes.id, processVersions.processId))
+      .leftJoin(serviceAccounts, eq(serviceAccounts.id, requests.serviceAccountId))
       .leftJoin(lastEvent, eq(lastEvent.requestId, requests.id))
       .where(where)
       .orderBy(desc(requests.createdAt));
@@ -279,31 +300,44 @@ export class RequestReads {
           .orderBy(desc(tasks.completedAt))
       : [];
     const names = await lookupNames(this.db, [
-      ...rows.map((r) => r.initiatorId),
+      ...rows.flatMap((r) => (r.initiatorId ? [r.initiatorId] : [])),
       ...open.map(taskAssignee),
       ...returnedTasks.flatMap(taskPeople),
     ]);
-    return rows.map((r) => ({
-      id: r.id,
-      number: r.number,
-      title: r.title,
-      status: r.status,
-      process: { id: r.processId, name: r.processName, version: r.version },
-      initiator: actor(names, r.initiatorId),
-      openTasks: open
-        .filter((t) => t.requestId === r.id)
-        .map((t) => ({
-          id: t.id,
-          nodeName: t.nodeName,
-          assignee: assigneeRef(names, taskAssignee(t)),
-        })),
-      returned: returnedOf(
-        returnedTasks.find((t) => t.requestId === r.id),
-        names,
-      ),
-      createdAt: iso(r.createdAt),
-      updatedAt: iso(r.updatedAt ?? r.createdAt),
-    }));
+    return rows.map((r) => {
+      const serviceAccount = r.serviceAccountId
+        ? { id: r.serviceAccountId, name: r.serviceAccountName ?? '' }
+        : null;
+      const initiator: Initiator = r.initiatorId
+        ? { type: 'participant', ...actor(names, r.initiatorId) }
+        : {
+            type: 'service_account',
+            id: serviceAccount?.id ?? '',
+            name: serviceAccount?.name ?? '',
+          };
+      return {
+        id: r.id,
+        number: r.number,
+        title: r.title,
+        status: r.status,
+        process: { id: r.processId, name: r.processName, version: r.version },
+        initiator,
+        serviceAccount,
+        openTasks: open
+          .filter((t) => t.requestId === r.id)
+          .map((t) => ({
+            id: t.id,
+            nodeName: t.nodeName,
+            assignee: assigneeRef(names, taskAssignee(t)),
+          })),
+        returned: returnedOf(
+          returnedTasks.find((t) => t.requestId === r.id),
+          names,
+        ),
+        createdAt: iso(r.createdAt),
+        updatedAt: iso(r.updatedAt ?? r.createdAt),
+      };
+    });
   }
 }
 

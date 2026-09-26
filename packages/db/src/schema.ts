@@ -116,6 +116,20 @@ export const roleMembers = pgTable(
   (t) => [primaryKey({ columns: [t.roleId, t.participantId] })],
 );
 
+/**
+ * Service Account：外部系統透過外部 API 發起 Request 用的非人類帳號，沒有 Manager。
+ * API key 是高熵的隨機字串，只存 SHA-256 hash（明文只在發放、輪替時回傳一次）；輪替時直接換掉 hash，舊的 key 立即失效。
+ */
+export const serviceAccounts = pgTable('service_accounts', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  name: text('name').notNull().unique(),
+  apiKeyHash: text('api_key_hash').notNull().unique(),
+  /** key 的開頭幾個字元，只給人辨識用，不足以呼叫 API。 */
+  apiKeyPrefix: text('api_key_prefix').notNull(),
+  apiKeyIssuedAt: timestamp('api_key_issued_at', { withTimezone: true }).notNull().defaultNow(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
 // ─── 流程定義 ──────────────────────────────────────────────────────────────
 
 /** Process 與它唯一的一份草稿；draft 為 null 代表目前版本之後沒有改動。 */
@@ -159,6 +173,20 @@ export const processObserverRoles = pgTable(
   (t) => [primaryKey({ columns: [t.processId, t.roleId] }), index().on(t.roleId)],
 );
 
+/** Service Account 可以發起的 Process；沒有列在這裡的一律不能透過外部 API 發起。改了立刻生效。 */
+export const serviceAccountProcesses = pgTable(
+  'service_account_processes',
+  {
+    serviceAccountId: uuid('service_account_id')
+      .notNull()
+      .references(() => serviceAccounts.id),
+    processId: uuid('process_id')
+      .notNull()
+      .references(() => processes.id),
+  },
+  (t) => [primaryKey({ columns: [t.serviceAccountId, t.processId] })],
+);
+
 /** 已發佈的 Process Version：只新增、不修改（資料庫 trigger 擋下 UPDATE 與 DELETE）。版本號最大的是目前版本。 */
 export const processVersions = pgTable(
   'process_versions',
@@ -190,7 +218,11 @@ export const REQUEST_STATUSES = [
 ] as const;
 export type RequestStatus = (typeof REQUEST_STATUSES)[number];
 
-/** 一筆 Request 對應一個 Temporal workflow，workflow ID 等於 Request ID。發起時鎖定 Process Version。 */
+/**
+ * 一筆 Request 對應一個 Temporal workflow，workflow ID 等於 Request ID。發起時鎖定 Process Version。
+ * 發起人通常是 Participant（initiatorId）；Service Account 透過外部 API 發起時記下 serviceAccountId，
+ * 帶 on_behalf_of 時發起人是那位 Participant，沒有帶時 initiatorId 為 null，發起人就是 Service Account 本身。
+ */
 export const requests = pgTable(
   'requests',
   {
@@ -200,16 +232,22 @@ export const requests = pgTable(
     processVersionId: uuid('process_version_id')
       .notNull()
       .references(() => processVersions.id),
-    initiatorId: uuid('initiator_id')
-      .notNull()
-      .references(() => participants.id),
+    initiatorId: uuid('initiator_id').references(() => participants.id),
+    serviceAccountId: uuid('service_account_id').references(() => serviceAccounts.id),
     title: text('title').notNull(),
     status: text('status').$type<RequestStatus>().notNull().default('running'),
     /** 第幾輪：發起時是 1，每次 Return 後重新送出加 1。Task 與 Form 資料都記下自己屬於哪一輪。 */
     round: integer('round').notNull().default(1),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
-  (t) => [index().on(t.initiatorId)],
+  (t) => [
+    index().on(t.initiatorId),
+    index().on(t.serviceAccountId),
+    check(
+      'requests_has_initiator',
+      sql`num_nonnulls(${t.initiatorId}, ${t.serviceAccountId}) >= 1`,
+    ),
+  ],
 );
 
 /** superseded：因為 Return、Withdraw、Cancel、Reassign 或 Escalation 而作廢，不再需要處理。 */
@@ -332,9 +370,8 @@ export const requestData = pgTable(
     /** 填寫時 Request 的第幾輪；重新送出後先前每一輪的資料都保留。 */
     round: integer('round').notNull().default(1),
     data: jsonb('data').$type<Record<string, unknown>>().notNull(),
-    submittedBy: uuid('submitted_by')
-      .notNull()
-      .references(() => participants.id),
+    /** 填寫的 Participant；Service Account 沒有代表任何人發起時，開始表單的這一列為 null（由該 Service Account 送出）。 */
+    submittedBy: uuid('submitted_by').references(() => participants.id),
     submittedAt: timestamp('submitted_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [unique().on(t.requestId, t.nodeId, t.round)],

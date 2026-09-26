@@ -23,7 +23,8 @@ export interface NotificationDeps {
 export interface RequestSummary {
   title: string;
   processName: string;
-  initiatorId: string;
+  /** Service Account 沒有代表任何人發起時為 null：沒有發起人可以通知。 */
+  initiatorId: string | null;
   status: (typeof requests.$inferSelect)['status'];
 }
 
@@ -45,8 +46,9 @@ export async function requestSummary(
   return row;
 }
 
-/** 這些 Participant 中沒有停用的人的 email。 */
-export async function activeEmails(db: Database, participantIds: string[]): Promise<string[]> {
+/** 這些 Participant 中沒有停用的人的 email；null（例如 Service Account 發起的 Request 沒有發起人）略過。 */
+export async function activeEmails(db: Database, ids: (string | null)[]): Promise<string[]> {
+  const participantIds = ids.filter((id): id is string => id !== null);
   if (participantIds.length === 0) return [];
   const rows = await db
     .select({ email: authUsers.email })
@@ -80,11 +82,14 @@ export async function reassignerEmails(db: Database): Promise<string[]> {
   return rows.map((r) => r.email);
 }
 
-/** Email 節點的收件人；發起人的 Manager 沒有設定或已停用時沒有收件人（activeEmails 會濾掉停用的人）。 */
+/**
+ * Email 節點的收件人；發起人的 Manager 沒有設定或已停用時沒有收件人（activeEmails 會濾掉停用的人）。
+ * Service Account 沒有代表任何人發起時沒有發起人（initiatorId 為 null），寄給發起人或 Manager 都沒有收件人。
+ */
 export async function emailRecipients(
   db: Database,
   recipient: EmailRecipient,
-  initiatorId: string,
+  initiatorId: string | null,
 ): Promise<string[]> {
   switch (recipient.type) {
     case 'participant':
@@ -94,6 +99,7 @@ export async function emailRecipients(
     case 'initiator':
       return activeEmails(db, [initiatorId]);
     case 'manager': {
+      if (!initiatorId) return [];
       const [row] = await db
         .select({ managerId: participants.managerId })
         .from(participants)

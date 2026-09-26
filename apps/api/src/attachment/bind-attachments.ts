@@ -11,7 +11,8 @@ export async function bindAttachments(
   tx: Pick<Database, 'update'>,
   form: FormSchema,
   data: StoredFormData,
-  step: { requestId: string; submittedBy: string },
+  /** submittedBy 為 null（Service Account 自己發起）時，只能沿用已經屬於這筆 Request 的附件。 */
+  step: { requestId: string; submittedBy: string | null },
 ): Promise<void> {
   const ids = [
     ...new Set(
@@ -28,10 +29,12 @@ export async function bindAttachments(
     .where(
       and(
         inArray(attachments.id, ids),
-        or(
-          and(isNull(attachments.requestId), eq(attachments.uploadedBy, step.submittedBy)),
-          eq(attachments.requestId, step.requestId),
-        ),
+        step.submittedBy
+          ? or(
+              and(isNull(attachments.requestId), eq(attachments.uploadedBy, step.submittedBy)),
+              eq(attachments.requestId, step.requestId),
+            )
+          : eq(attachments.requestId, step.requestId),
       ),
     )
     .returning({ id: attachments.id });

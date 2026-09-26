@@ -32,6 +32,16 @@ import { saveStepData, validateStepData } from './form-data.js';
 import { RequestReads } from './request-reads.js';
 import { supersedeOpenTasks } from './supersede.js';
 
+type CurrentVersion = Awaited<ReturnType<typeof currentVersions>>[number];
+
+/**
+ * 發起 Request 的身分。在平台上發起時是 Participant 自己；透過外部 API 發起時記下 Service Account，
+ * 帶 on_behalf_of 時 initiatorId 是那位 Participant，沒有帶時為 null（發起人就是 Service Account，沒有 Manager）。
+ */
+export type Starter =
+  | { initiatorId: string; serviceAccountId: null }
+  | { initiatorId: string | null; serviceAccountId: string };
+
 @Injectable()
 export class RequestsService {
   constructor(
@@ -43,40 +53,70 @@ export class RequestsService {
   ) {}
 
   /**
-   * 以 Process 的目前版本發起 Request，並啟動 workflow ID 等於 Request ID 的 interpreter workflow。
+   * Participant 在平台上以 Process 的目前版本發起 Request。
    * Process 設定了 Initiator Role 時，只有其成員可以發起，其他人回 403。
+   */
+  async start(input: StartRequestInput, me: ActiveParticipant): Promise<RequestDetail> {
+    const current = await this.currentVersion(input.processId);
+    if (!(await canStart(this.db, input.processId, me.id)))
+      throw new ForbiddenException('你不在這個 Process 的 Initiator Role 裡，不能發起');
+    const requestId = await this.launch(current, input, {
+      initiatorId: me.id,
+      serviceAccountId: null,
+    });
+    return this.detail(requestId, me);
+  }
+
+  /** Process 的目前版本；Process 不存在或還沒發佈時回 404。 */
+  async currentVersion(processId: string): Promise<CurrentVersion> {
+    const [current] = await currentVersions(this.db, processId);
+    if (!current) throw new NotFoundException('找不到可以發起的 Process');
+    return current;
+  }
+
+  /**
+   * 以 Process Version 建立 Request，並啟動 workflow ID 等於 Request ID 的 interpreter workflow；回傳 Request ID。
+   * 呼叫前由呼叫者檢查發起的權限（Initiator Role，或 Service Account 的授權範圍）。
    * 開始表單的資料先依 Process Version 裡的 Form 驗證，和 Request 一起存進 request_data；
    * workflow 的輸入只有 ID，不帶任何表單資料。
    * workflow 在 transaction 提交前啟動：啟動失敗時 Request 不會留下；
    * 萬一 workflow 的 activity 比提交早執行，讀不到 Request 會重試。
    */
-  async start(input: StartRequestInput, me: ActiveParticipant): Promise<RequestDetail> {
-    const [current] = await currentVersions(this.db, input.processId);
-    if (!current) throw new NotFoundException('找不到可以發起的 Process');
-    if (!(await canStart(this.db, input.processId, me.id)))
-      throw new ForbiddenException('你不在這個 Process 的 Initiator Role 裡，不能發起');
+  async launch(
+    current: CurrentVersion,
+    input: Pick<StartRequestInput, 'title' | 'data'>,
+    starter: Starter,
+  ): Promise<string> {
     const startForm = startFormOf(current.dsl);
+    // 附件只能由登入的 Participant 自己上傳後引用；透過外部 API 發起時（包括帶 on_behalf_of）沒有上傳者，
+    // 附件欄位引用任何附件都回 422「找不到附件」。
+    const submitterId = starter.serviceAccountId ? null : starter.initiatorId;
     const submission = await validateStepData(
       this.db,
       startForm,
-      await this.attachments.resolve(startForm, input.data, { submitterId: me.id }),
+      await this.attachments.resolve(startForm, input.data, { submitterId }),
     );
     const startNode = current.dsl.nodes.find((n) => n.type === 'start');
 
-    const requestId = await this.db.transaction(async (tx) => {
+    return this.db.transaction(async (tx) => {
       const [created] = await tx
         .insert(requests)
-        .values({ processVersionId: current.versionId, initiatorId: me.id, title: input.title })
+        .values({
+          processVersionId: current.versionId,
+          initiatorId: starter.initiatorId,
+          serviceAccountId: starter.serviceAccountId,
+          title: input.title,
+        })
         .returning({ id: requests.id });
       if (!created) throw new Error('建立 Request 失敗');
       await tx
         .insert(requestEvents)
-        .values({ requestId: created.id, type: 'request.started', actorId: me.id });
+        .values({ requestId: created.id, type: 'request.started', actorId: starter.initiatorId });
       if (startNode)
         await saveStepData(tx, submission, {
           requestId: created.id,
           nodeId: startNode.id,
-          submittedBy: me.id,
+          submittedBy: starter.initiatorId,
           round: 1,
         });
 
@@ -91,7 +131,6 @@ export class RequestsService {
       });
       return created.id;
     });
-    return this.detail(requestId, me);
   }
 
   /**

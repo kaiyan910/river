@@ -10,13 +10,14 @@ import {
 } from 'lucide-react';
 import type { ReactNode } from 'react';
 import { FormDataView } from '@/components/form-fields';
-import { Avatar } from '@/components/people';
+import { Avatar, InitiatorAvatar } from '@/components/people';
 import { Input } from '@/components/ui/input';
 import { branchLabel } from '@/lib/processes';
 import {
   assigneeLabel,
   ESCALATION_FALLBACK_REASON_LABELS,
   FALLBACK_REASON_LABELS,
+  initiatorLabel,
   isAdvancing,
   requestNumber,
 } from '@/lib/requests';
@@ -208,8 +209,8 @@ export function RequestHeader({ request }: { request: RequestDetail }) {
       <h1 className="font-semibold text-[1.45em]">{request.title}</h1>
       <div className="flex flex-wrap items-center gap-3 text-[0.9em] text-muted-foreground">
         <span className="inline-flex items-center gap-1.5">
-          <Avatar id={request.initiator.id} name={request.initiator.name} size={20} />
-          {request.initiator.name} 發起於 {formatTime(request.createdAt)}
+          <InitiatorAvatar initiator={request.initiator} size={20} />
+          {initiatorLabel(request)} 發起於 {formatTime(request.createdAt)}
         </span>
         <RequestStatus request={request} withStep />
       </div>

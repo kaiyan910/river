@@ -3,11 +3,12 @@ import { useQuery } from '@tanstack/react-query';
 import { CheckCircle2, Inbox, Undo2, XCircle } from 'lucide-react';
 import { useRef, useState } from 'react';
 import { FormRunner } from '@/components/form-fields';
-import { Avatar } from '@/components/people';
+import { InitiatorAvatar } from '@/components/people';
 import { toast } from '@/components/toast';
 import { Button } from '@/components/ui/button';
 import {
   formRejection,
+  initiatorLabel,
   myTasksQueryOptions,
   requestNumber,
   requestQueryOptions,
@@ -94,7 +95,7 @@ export function TasksPage({
                   selected === t.id && 'bg-accent hover:bg-accent',
                 )}
               >
-                <Avatar id={t.request.initiator.id} name={t.request.initiator.name} size={30} />
+                <InitiatorAvatar initiator={t.request.initiator} size={30} />
                 <span className="grid min-w-0 flex-1 gap-0.5">
                   <span className="flex items-baseline justify-between gap-2">
                     <span className="truncate font-medium">{t.request.title}</span>
@@ -103,7 +104,7 @@ export function TasksPage({
                     </span>
                   </span>
                   <span className="truncate text-[0.86em] text-muted-foreground">
-                    {t.request.initiator.name} · {t.request.process.name} · {t.nodeName}
+                    {initiatorLabel(t.request)} · {t.request.process.name} · {t.nodeName}
                   </span>
                 </span>
               </button>

@@ -16,6 +16,10 @@ import { OrgModule } from './org/org.module.js';
 import { ProcessModule } from './process/process.module.js';
 import { RequestModule } from './request/request.module.js';
 import {
+  ExternalApiModule,
+  ServiceAccountModule,
+} from './service-account/service-account.module.js';
+import {
   APP_URL,
   ATTACHMENT_STORAGE,
   AUTH,
@@ -89,6 +93,8 @@ export class AppModule {
         ProcessModule,
         RequestModule,
         AttachmentModule,
+        ServiceAccountModule,
+        ExternalApiModule,
       ],
       controllers: [HealthController],
       providers: [{ provide: APP_PIPE, useClass: ZodValidationPipe }],

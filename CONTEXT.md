@@ -11,7 +11,7 @@
 _Avoid_: End user, 用戶, member
 
 **Service Account**:
-給外部系統透過 API 發起 Request 用的非人類帳號，只能發起被授權的 Process；可以代表某位 Participant 發起。沒有 Manager。
+給外部系統透過 API 發起 Request 用的非人類帳號，只能發起被授權的 Process；可以代表某位 Participant 發起（`on_behalf_of`），這時那位 Participant 才是發起人。沒有代表任何人時，Service Account 本身就是發起人。沒有 Manager。
 _Avoid_: Bot, integration user, API user
 
 **Role**:
@@ -69,13 +69,13 @@ _Avoid_: Fork, 會簽, 用「並行分支」稱呼其中單獨一條分支（稱
 _Avoid_: Secret, connection, key
 
 **Fallback Role**:
-指派給 Manager 的人工步驟上必須設定的後備 Role；當發起人沒有 Manager，或 Manager 帳號已停用時，Task 改派給它。
+指派給 Manager 的人工步驟上必須設定的後備 Role；當發起人沒有 Manager（包括發起人是 Service Account），或 Manager 帳號已停用時，Task 改派給它。
 _Avoid_: Default assignee, backup
 
 ### Request 生命週期
 
 **Request**:
-Participant 依某個 Process Version 發起的一筆具體申請，從發起一路走到完成或終止。
+Participant（或透過外部 API 的 Service Account）依某個 Process Version 發起的一筆具體申請，從發起一路走到完成或終止。
 _Avoid_: Instance, case, ticket, 工單
 
 **Task**:

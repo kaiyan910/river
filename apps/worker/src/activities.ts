@@ -647,13 +647,16 @@ async function loadRound(
 
 /**
  * 這位 Participant（發起人，或 Escalation 時目前的處理人）有有效（沒有停用）的 Manager 時指派給 Manager，
- * 否則改派給 Fallback Role 並記下原因。
+ * 否則改派給 Fallback Role 並記下原因。Service Account 沒有代表任何人發起時沒有發起人（null），
+ * Service Account 沒有 Manager，所以一律改派給 Fallback Role（no_manager）。
  */
 async function resolveManager(
   tx: Tx,
-  participantId: string,
+  participantId: string | null,
   fallbackRoleId: string,
 ): Promise<Assignment> {
+  if (!participantId)
+    return { assigneeId: null, roleId: fallbackRoleId, fallbackReason: 'no_manager' };
   const [row] = await tx
     .select({ managerId: participants.managerId, deactivatedAt: managers.deactivatedAt })
     .from(participants)

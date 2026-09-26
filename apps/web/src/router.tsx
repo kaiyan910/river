@@ -18,10 +18,12 @@ import {
   PROCESSES,
   REASSIGN,
   ROLES,
+  SERVICE_ACCOUNTS,
 } from '@/navigation';
 import { ParticipantsPage } from '@/routes/admin/participants';
 import { ReassignPage } from '@/routes/admin/reassign';
 import { RolesPage } from '@/routes/admin/roles';
+import { ServiceAccountsPage } from '@/routes/admin/service-accounts';
 import { AppShell } from '@/routes/app-shell';
 import { ProcessesPage } from '@/routes/designer/processes';
 import { ForbiddenPage } from '@/routes/forbidden';
@@ -156,6 +158,24 @@ const reassignRoute = createRoute({
   },
 });
 
+const serviceAccountsRoute = createRoute({
+  getParentRoute: () => authenticatedRoute,
+  path: '/admin/service-accounts',
+  validateSearch: selectionSearch,
+  component: function ServiceAccounts() {
+    const { id } = serviceAccountsRoute.useSearch();
+    const navigate = serviceAccountsRoute.useNavigate();
+    return (
+      <Guarded item={SERVICE_ACCOUNTS}>
+        <ServiceAccountsPage
+          selected={id}
+          onSelect={(next) => navigate({ search: { id: next } })}
+        />
+      </Guarded>
+    );
+  },
+});
+
 const processesRoute = createRoute({
   getParentRoute: () => authenticatedRoute,
   path: '/designer/processes',
@@ -252,6 +272,7 @@ const routeTree = rootRoute.addChildren([
     participantsRoute,
     rolesRoute,
     reassignRoute,
+    serviceAccountsRoute,
     processesRoute,
     startRoute,
     tasksRoute,

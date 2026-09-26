@@ -162,6 +162,17 @@ export const ESCALATION_FALLBACK_REASON_LABELS: Record<FallbackReason, string> =
   manager_deactivated: '處理人的 Manager 已停用',
 };
 
+/**
+ * 畫面上的發起人：Participant 的姓名；Service Account 代表他發起時加上「經由」哪個 Service Account；
+ * Service Account 自己發起時標明是 Service Account。
+ */
+export function initiatorLabel(r: Pick<RequestSummary, 'initiator' | 'serviceAccount'>): string {
+  if (r.initiator.type === 'service_account') return `${r.initiator.name}（Service Account）`;
+  return r.serviceAccount
+    ? `${r.initiator.name}（經由 ${r.serviceAccount.name}）`
+    : r.initiator.name;
+}
+
 /** R-000042 */
 export function requestNumber(n: number): string {
   return `R-${String(n).padStart(6, '0')}`;

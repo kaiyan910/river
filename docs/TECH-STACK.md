@@ -131,9 +131,9 @@ Worker 是一般的 Node.js 程式，不使用 NestJS。Temporal 的 workflow sa
 | Session | 存在 Postgres，用 httpOnly、Secure、SameSite=Lax 的 cookie；因為同一個網域，所以沒有 CORS 問題 |
 | 帳號建立 | Administrator 建立或用 CSV 匯入（包含 Manager 欄位），員工收到邀請信後自行設定密碼 |
 | MFA | 持有 `credential.manage`、`user.manage` 或 `process.publish` 的人必須啟用 TOTP，其他人可自行選擇 |
-| Permission | `process.edit`、`process.publish`、`credential.manage`、`user.manage`、`role.manage`、`request.cancel`、`task.reassign`、`request.view_all` |
-| 預設組合 | Designer = edit + publish；Administrator = user/role.manage + cancel + reassign + view_all；`credential.manage` 要單獨授予 |
-| Service Account | 每個帳號有一把可輪替的 API key（只存 hash），並限定可發起的 Process |
+| Permission | `process.edit`、`process.publish`、`credential.manage`、`user.manage`、`role.manage`、`request.cancel`、`task.reassign`、`request.view_all`、`service_account.manage` |
+| 預設組合 | Designer = edit + publish；Administrator = user/role.manage + cancel + reassign + view_all + service_account.manage；`credential.manage` 要單獨授予 |
+| Service Account | 每個帳號有一把可輪替的 API key（只存 SHA-256 hash，明文只在發放、輪替時顯示一次），並限定可發起的 Process；外部 API 在 `/api/external/*`，OpenAPI 文件在 `/api/external/docs` |
 | 停用帳號 | Session 立即失效；直接指派給該帳號的 Task 會進入「待 Reassign」清單 |
 
 ## 部署
