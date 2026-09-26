@@ -33,6 +33,7 @@ import {
 } from '@xyflow/react';
 import {
   AlarmClock,
+  BellOff,
   CirclePlay,
   CircleStop,
   ClipboardPen,
@@ -313,6 +314,12 @@ function NodeCard({ data, selected, type }: NodeProps<RFNode>) {
       )}
       {type === 'parallelJoin' && (
         <div className="mt-1 text-[0.85em] text-muted-foreground">等所有分支完成才繼續</div>
+      )}
+      {data.node.type === 'end' && data.node.completionNotification === false && (
+        <div className="mt-1 flex items-center justify-center gap-1 text-[0.85em] text-muted-foreground">
+          <BellOff size={12} aria-hidden className="shrink-0" />
+          不通知發起人
+        </div>
       )}
       {data.node.type === 'email' && <RecipientLine recipient={data.node.recipient} />}
       {data.node.type === 'http' && (

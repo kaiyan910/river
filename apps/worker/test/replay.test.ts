@@ -22,6 +22,7 @@ const REQUIRED = [
   'return-resubmit',
   'parallel',
   'escalation',
+  'quiet-end',
   'scheduled-start',
   'scheduled-start-skipped',
 ];

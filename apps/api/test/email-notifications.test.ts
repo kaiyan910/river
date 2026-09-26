@@ -54,6 +54,12 @@ function chain(...steps: ProcessNode[]): ProcessDsl {
   };
 }
 
+/** 把所有「結束」節點的完成通知關掉。 */
+const quiet = (dsl: ProcessDsl): ProcessDsl => ({
+  ...dsl,
+  nodes: dsl.nodes.map((n) => (n.type === 'end' ? { ...n, completionNotification: false } : n)),
+});
+
 const approval = (id: string, assignee: Assignee): ProcessNode => ({
   id,
   type: 'approval',
@@ -252,6 +258,78 @@ describe('Email 通知與 Email 節點', () => {
     const completed = mails.find((m) => m.to === 'employee@river.test');
     expect(completed?.subject).toContain('完成');
     expect(completed?.text).toContain(`${ORIGIN}/requests?id=${request.id}`);
+  });
+
+  it('「結束」節點關閉完成通知時不寄給發起人，Email 節點照常寄出，時間軸不記錄', async () => {
+    const processId = await publish(
+      '出差－不通知完成',
+      quiet(
+        chain(email('notify', { type: 'initiator' }, { subject: '[發起人] {{requestTitle}}' })),
+      ),
+    );
+    const request = await start(employee, processId, '4 月蘭嶼出差');
+    const done = await eventually(
+      () => detail(request.id, employee),
+      (d) => d.status === 'completed',
+    );
+    expect(done.events.map((e) => e.type)).toEqual([
+      'request.started',
+      'step.email_sent',
+      'request.completed',
+    ]);
+    await waitForMails('4 月蘭嶼出差', 1);
+    // 等一下，確認沒有完成通知。
+    await new Promise((r) => setTimeout(r, 300));
+    expect(mailsAbout('4 月蘭嶼出差').map((m) => m.subject)).toEqual(['[發起人] 4 月蘭嶼出差']);
+  });
+
+  it('同一個 Process 走到不同「結束」時，各自依節點設定決定是否寄完成通知', async () => {
+    const nodes: ProcessNode[] = [
+      { id: 'start', type: 'start', name: '開始', formId: 'trip', position: at(0) },
+      { id: 'check', type: 'condition', name: '金額判斷', position: at(170) },
+      {
+        id: 'small',
+        type: 'end',
+        name: '小額結束',
+        completionNotification: false,
+        position: at(340),
+      },
+      { id: 'large', type: 'end', name: '結束', position: at(340) },
+    ];
+    const processId = await publish('出差－依金額通知', {
+      nodes,
+      edges: [
+        { id: 'e0', source: 'start', target: 'check' },
+        {
+          id: 'e-small',
+          source: 'check',
+          target: 'small',
+          branch: { type: 'expression', expression: 'amount < 1000' },
+        },
+        { id: 'e-large', source: 'check', target: 'large', branch: { type: 'default' } },
+      ],
+      forms: [trip, receipt],
+    });
+
+    const small = await start(employee, processId, '5 月小琉球出差', {
+      destination: '小琉球',
+      amount: 500,
+    });
+    const large = await start(employee, processId, '6 月東京出差', {
+      destination: '東京',
+      amount: 50_000,
+    });
+    for (const r of [small, large])
+      await eventually(
+        () => detail(r.id, employee),
+        (d) => d.status === 'completed',
+      );
+
+    const [completed] = await waitForMails('6 月東京出差', 1);
+    expect(completed?.to).toBe('employee@river.test');
+    expect(completed?.subject).toContain('完成');
+    await new Promise((r) => setTimeout(r, 300));
+    expect(mailsAbout('5 月小琉球出差')).toEqual([]);
   });
 
   it('Email 節點寄給發起人的 Manager，代入範本變數後繼續往下走，時間軸記錄寄出', async () => {

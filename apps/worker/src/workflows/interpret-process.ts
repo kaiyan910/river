@@ -155,6 +155,8 @@ export async function interpretProcess({
 
   // createTask 發現 Request 已經不是 running：在哪裡發現的（見 walk 裡 createTask 之後的說明）。
   let notRunning: 'outsideBranch' | 'inBranch' | null = null;
+  // 走到的「結束」節點；它不會在並行分支內，所以一筆 Request 只會走到一個。
+  let reachedEnd: Extract<ProcessNode, { type: 'end' }> | undefined;
   const stopped = () => notRunning !== null || interrupted();
   // 這一輪每個節點走到第幾次；evaluateCondition 與 evaluateAutoApproval 重試時用來找回當時的結果。
   const visits = new Map<string, number>();
@@ -294,6 +296,7 @@ export async function interpretProcess({
       }
       if (!stopped()) node = next(node);
     }
+    if (node?.type === 'end') reachedEnd = node;
     return node?.type === 'parallelJoin' && !stopped() ? node : undefined;
   };
 
@@ -388,7 +391,9 @@ export async function interpretProcess({
     });
   if (notRunning) return;
   await completeRequest(requestId);
-  await notify({ requestId, event: 'completed' });
+  // completionNotification 是新的設定，舊的 history 裡的「結束」節點都沒有它，一樣寄出、呼叫的 activity 不變，
+  // 所以不需要 patched()。
+  if (reachedEnd?.completionNotification !== false) await notify({ requestId, event: 'completed' });
 }
 
 /**

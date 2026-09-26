@@ -283,6 +283,20 @@ describe.runIf(RECORD)('產生 replay 用的 history 樣本', () => {
     return id;
   });
 
+  record('quiet-end', '審批 → 完成，「結束」節點關閉完成通知', async () => {
+    const dsl = chain([
+      approval('manager', '主管審批', { type: 'participant', participantId: who('manager').id }),
+    ]);
+    const processId = await publish('借用會議室', {
+      ...dsl,
+      nodes: dsl.nodes.map((n) => (n.type === 'end' ? { ...n, completionNotification: false } : n)),
+    });
+    const id = await start(processId, '10/8 大會議室');
+    await complete(id, 'manager', { outcome: 'approved' });
+    await waitForStatus(id, 'completed');
+    return id;
+  });
+
   record('parallel', '兩條分支各自審批，匯合後主管審批 → 完成', async () => {
     const processId = await publish(
       '採購',

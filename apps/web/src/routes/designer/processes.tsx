@@ -31,6 +31,7 @@ import {
   FileText,
   KeyRound,
   Lock,
+  Mail,
   Plus,
   Save,
   Search,
@@ -861,6 +862,17 @@ function Inspector({
           errors={node.data.errors}
           onChange={onChange}
         />
+      )}
+      {settings.type === 'end' && (
+        <label className="flex items-center gap-1.5 text-[0.85em]">
+          <input
+            type="checkbox"
+            checked={settings.completionNotification !== false}
+            onChange={(e) => onChange({ completionNotification: e.target.checked })}
+          />
+          <Mail size={13} className="text-muted-foreground" aria-hidden />
+          寄送完成通知給發起人
+        </label>
       )}
       {(settings.type === 'start' || settings.type === 'form') && (
         <div className="grid gap-1.5">

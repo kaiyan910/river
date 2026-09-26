@@ -77,7 +77,15 @@ export const startNodeSchema = z.object({
   type: z.literal('start'),
   formId: formRefSchema,
 });
-export const endNodeSchema = z.object({ ...nodeBase, type: z.literal('end') });
+/**
+ * 結束節點：Request 走到這裡就完成。completionNotification 是 false 時不寄完成通知給發起人；
+ * 舊的 DSL 沒有這個欄位，視同寄送。
+ */
+export const endNodeSchema = z.object({
+  ...nodeBase,
+  type: z.literal('end'),
+  completionNotification: z.boolean().nullish(),
+});
 /**
  * 審批節點的 Auto-approval：流程走到這一步時，表達式的結果是 true 就由系統直接核准，不建立 Task。
  * 表達式和條件分支一樣用欄位代碼讀取這一輪填過的 Form 資料，例如 `amount < 1000`。

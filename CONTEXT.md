@@ -110,6 +110,10 @@ _Avoid_: Nudge, 催辦通知
 Task 逾時未處理時，依節點設定轉給其他人：指派對象是特定人或 Manager 時，轉給該處理人的 Manager；指派對象是 Role 時，轉給 Designer 另外指定的人或 Role。Escalation 絕不會自動核准。
 _Avoid_: Timeout action, 升級（單獨使用時）
 
+**完成通知**（Completion Notification）:
+Request 走到「結束」節點而完成時，寄給發起人的信。Designer 可以在個別「結束」節點上關閉它（預設寄送），所以同一個 Process 裡，走到不同「結束」的 Request 可以有的寄、有的不寄。Email 節點寄出的信不算完成通知，不受這個設定影響。
+_Avoid_: 完成電郵, completion email
+
 **Reassign**:
 Administrator 把一個未完成的 Task 改派給另一位 Participant。
 _Avoid_: Delegate, transfer, 代理
