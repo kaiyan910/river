@@ -1,5 +1,7 @@
 import {
   type Database,
+  type FallbackReason,
+  participants,
   processVersions,
   requestEvents,
   requests,
@@ -9,6 +11,7 @@ import {
 import type { ProcessDsl } from '@river/dsl';
 import { ApplicationFailure } from '@temporalio/activity';
 import { and, eq, sql } from 'drizzle-orm';
+import { alias } from 'drizzle-orm/pg-core';
 
 export interface CreateTaskInput {
   requestId: string;
@@ -17,10 +20,16 @@ export interface CreateTaskInput {
   nodeId: string;
   nodeName: string;
   kind: TaskKind;
-  /** 指派給特定 Participant 或 Role，兩者剛好有一個（欄位名稱沿用舊版，執行中的 activity 重試時仍然相容）。 */
+  /**
+   * 指派對象剛好有一個：特定 Participant、Role，或發起人的 Manager（找不到有效的 Manager 時改派給 Fallback Role）。
+   * 欄位名稱沿用舊版，執行中的 activity 重試時仍然相容。
+   */
   assigneeId?: string;
   roleId?: string;
+  initiatorManager?: { fallbackRoleId: string };
 }
+
+const managers = alias(participants, 'managers');
 
 /** interpreter 需要的流程圖；不含 Form schema，Temporal history 裡只有節點與連線。 */
 export type ProcessGraph = Omit<ProcessDsl, 'forms'>;
@@ -49,16 +58,24 @@ export function createActivities(db: Database) {
      * 先鎖住 Request 再建立 Task（與 API 的 Return、Withdraw 同樣的鎖定順序）：
      * Request 已經不是 running（例如剛被 Withdraw）時不建立，免得留下沒人需要處理的 Task。
      * Task 記下 Request 目前的輪次。回傳 false 代表 Request 已經結束、沒有建立 Task。
+     * 指派給發起人的 Manager 時，在建立 Task 的當下決定處理人，之後換 Manager 不影響已經建立的 Task。
      */
     async createTask(input: CreateTaskInput): Promise<boolean> {
       return db.transaction(async (tx) => {
         const [request] = await tx
-          .select({ status: requests.status, round: requests.round })
+          .select({
+            status: requests.status,
+            round: requests.round,
+            initiatorId: requests.initiatorId,
+          })
           .from(requests)
           .where(eq(requests.id, input.requestId))
           .for('update');
         if (!request) throw new Error(`找不到 Request ${input.requestId}`);
         if (request.status !== 'running') return false;
+        const assignment = input.initiatorManager
+          ? await resolveManager(tx, request.initiatorId, input.initiatorManager.fallbackRoleId)
+          : { assigneeId: input.assigneeId ?? null, roleId: input.roleId ?? null };
         const [created] = await tx
           .insert(tasks)
           .values({
@@ -68,15 +85,18 @@ export function createActivities(db: Database) {
             nodeName: input.nodeName,
             kind: input.kind,
             round: request.round,
-            assigneeId: input.assigneeId ?? null,
-            roleId: input.roleId ?? null,
+            assigneeId: assignment.assigneeId,
+            roleId: assignment.roleId,
           })
           .onConflictDoNothing({ target: tasks.id })
           .returning({ id: tasks.id });
         if (created)
-          await tx
-            .insert(requestEvents)
-            .values({ requestId: input.requestId, type: 'task.created', taskId: input.taskId });
+          await tx.insert(requestEvents).values({
+            requestId: input.requestId,
+            type: 'task.created',
+            taskId: input.taskId,
+            fallbackReason: assignment.fallbackReason ?? null,
+          });
         return true;
       });
     },
@@ -96,3 +116,30 @@ export function createActivities(db: Database) {
 }
 
 export type Activities = ReturnType<typeof createActivities>;
+
+type Tx = Parameters<Parameters<Database['transaction']>[0]>[0];
+
+interface Assignment {
+  assigneeId: string | null;
+  roleId: string | null;
+  fallbackReason?: FallbackReason;
+}
+
+/** 發起人有有效（沒有停用）的 Manager 時指派給 Manager，否則改派給 Fallback Role 並記下原因。 */
+async function resolveManager(
+  tx: Tx,
+  initiatorId: string,
+  fallbackRoleId: string,
+): Promise<Assignment> {
+  const [row] = await tx
+    .select({ managerId: participants.managerId, deactivatedAt: managers.deactivatedAt })
+    .from(participants)
+    .leftJoin(managers, eq(managers.id, participants.managerId))
+    .where(eq(participants.id, initiatorId));
+  if (row?.managerId && !row.deactivatedAt) return { assigneeId: row.managerId, roleId: null };
+  return {
+    assigneeId: null,
+    roleId: fallbackRoleId,
+    fallbackReason: row?.managerId ? 'manager_deactivated' : 'no_manager',
+  };
+}

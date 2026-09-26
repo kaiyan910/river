@@ -1,0 +1,1 @@
+ALTER TABLE "request_events" ADD COLUMN "fallback_reason" text;

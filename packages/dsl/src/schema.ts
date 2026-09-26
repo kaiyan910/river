@@ -19,15 +19,26 @@ const nodeBase = {
   position: positionSchema,
 };
 
+const participantAssigneeSchema = z.object({
+  type: z.literal('participant'),
+  participantId: z.string().min(1),
+});
+const roleAssigneeSchema = z.object({ type: z.literal('role'), roleId: z.string().min(1) });
+
 /**
- * 人工步驟的指派對象：特定 Participant，或一個 Role（任一成員都可以直接處理，最先送出的生效）。
- * 之後會加上發起人的 Manager。
+ * 人工步驟的指派對象：特定 Participant、一個 Role（任一成員都可以直接處理，最先送出的生效），
+ * 或發起人的 Manager。指派給 Manager 時，發起人沒有 Manager 或 Manager 已停用，Task 改派給 Fallback Role；
+ * 草稿中 Fallback Role 可以還沒設定（null），發佈前由檢查器擋下。
  */
 export const assigneeSchema = z.discriminatedUnion('type', [
-  z.object({ type: z.literal('participant'), participantId: z.string().min(1) }),
-  z.object({ type: z.literal('role'), roleId: z.string().min(1) }),
+  participantAssigneeSchema,
+  roleAssigneeSchema,
+  z.object({ type: z.literal('manager'), fallbackRoleId: z.string().min(1).nullable() }),
 ]);
 export type Assignee = z.infer<typeof assigneeSchema>;
+
+/** Task 實際的指派對象：特定 Participant 或 Role。指派給 Manager 的節點在建立 Task 時才決定是哪一種。 */
+export type TaskAssignee = Extract<Assignee, { type: 'participant' | 'role' }>;
 
 /** 節點使用的 Form（同一份 DSL 裡 forms 的 id）；草稿中可以還沒指定。 */
 const formRefSchema = z.string().min(1).nullish();
@@ -46,7 +57,7 @@ export const approvalNodeSchema = z.object({
   assignee: assigneeSchema.nullable(),
 });
 
-/** 填表節點：指派一位 Participant 或一個 Role 填一份 Form；發佈前兩者都必須設定。 */
+/** 填表節點：指派一位 Participant、一個 Role 或發起人的 Manager 填一份 Form；發佈前兩者都必須設定。 */
 export const formNodeSchema = z.object({
   ...nodeBase,
   type: z.literal('form'),

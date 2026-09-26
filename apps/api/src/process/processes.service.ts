@@ -13,6 +13,7 @@ import type {
   ProcessVersion,
   PublishRejected,
   StartableProcess,
+  StepAssignee,
 } from '@river/contracts';
 import {
   authUsers,
@@ -30,6 +31,7 @@ import {
   mainPath,
   type ProcessDsl,
   type ProcessNode,
+  type TaskAssignee,
 } from '@river/dsl';
 import type { FormSchema } from '@river/forms';
 import { asc, desc, eq, inArray, max } from 'drizzle-orm';
@@ -272,7 +274,7 @@ export interface Names {
   roles: Map<string, string>;
 }
 
-/** 要查名稱的對象：Participant ID，或指派對象（Participant 或 Role）。 */
+/** 要查名稱的對象：Participant ID，或指派對象（Participant、Role，或 Manager 的 Fallback Role）。 */
 type Named = string | Assignee;
 
 /** 一次查出一批 Participant 與 Role 的名稱。 */
@@ -280,11 +282,7 @@ export async function lookupNames(db: Pick<Database, 'select'>, targets: Named[]
   const people = targets.flatMap((t) =>
     typeof t === 'string' ? [t] : t.type === 'participant' ? [t.participantId] : [],
   );
-  const roleIds = [
-    ...new Set(
-      targets.flatMap((t) => (typeof t !== 'string' && t.type === 'role' ? [t.roleId] : [])),
-    ),
-  ];
+  const roleIds = [...new Set(targets.flatMap(roleIdOf))];
   const roleRows = roleIds.length
     ? await db
         .select({ id: roles.id, name: roles.name })
@@ -297,8 +295,15 @@ export async function lookupNames(db: Pick<Database, 'select'>, targets: Named[]
   };
 }
 
-/** 指派對象加上名稱。 */
-export function assigneeRef(names: Names, assignee: Assignee): AssigneeRef {
+function roleIdOf(t: Named): string[] {
+  if (typeof t === 'string') return [];
+  if (t.type === 'role') return [t.roleId];
+  if (t.type === 'manager' && t.fallbackRoleId) return [t.fallbackRoleId];
+  return [];
+}
+
+/** Task 的指派對象加上名稱。 */
+export function assigneeRef(names: Names, assignee: TaskAssignee): AssigneeRef {
   return assignee.type === 'participant'
     ? {
         type: 'participant',
@@ -328,6 +333,18 @@ export function startFormOf(dsl: ProcessDsl): FormSchema | null {
   );
 }
 
+/** 節點的指派對象加上名稱；Manager 在建立 Task 時才決定是誰，這裡只帶 Fallback Role。 */
+function stepAssignee(names: Names, assignee: Assignee): StepAssignee {
+  if (assignee.type !== 'manager') return assigneeRef(names, assignee);
+  const { fallbackRoleId } = assignee;
+  return {
+    type: 'manager',
+    fallbackRole: fallbackRoleId
+      ? { id: fallbackRoleId, name: names.roles.get(fallbackRoleId) ?? '' }
+      : null,
+  };
+}
+
 /** 流程預覽：沿著主線列出每個節點，審批與填表節點帶處理人，開始與填表節點帶 Form。 */
 export function stepsOf(dsl: ProcessDsl, names: Names): ProcessStep[] {
   return mainPath(dsl).map((node) => {
@@ -337,7 +354,7 @@ export function stepsOf(dsl: ProcessDsl, names: Names): ProcessStep[] {
       nodeId: node.id,
       type: node.type,
       name: node.name,
-      assignee: assignee && assigneeRef(names, assignee),
+      assignee: assignee && stepAssignee(names, assignee),
       formId: formOf(dsl, node)?.id ?? null,
     };
   });

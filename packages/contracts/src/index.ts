@@ -115,6 +115,16 @@ const actorSchema = z.object({ id: z.string(), name: z.string() });
 export const assigneeRefSchema = actorSchema.extend({ type: z.enum(['participant', 'role']) });
 export type AssigneeRef = z.infer<typeof assigneeRefSchema>;
 
+/**
+ * 流程預覽裡人工步驟的指派對象：特定 Participant、Role，或發起人的 Manager。
+ * Manager 在建立 Task 時才決定是誰，所以預覽只帶 Fallback Role。
+ */
+export const stepAssigneeSchema = z.union([
+  assigneeRefSchema,
+  z.object({ type: z.literal('manager'), fallbackRole: actorSchema.nullable() }),
+]);
+export type StepAssignee = z.infer<typeof stepAssigneeSchema>;
+
 export const dslErrorSchema = z.object({
   nodeId: z.string().nullable(),
   code: z.enum(DSL_ERROR_CODES),
@@ -190,7 +200,7 @@ export const processStepSchema = z.object({
   nodeId: z.string(),
   type: z.enum(['start', 'form', 'approval', 'end']),
   name: z.string(),
-  assignee: assigneeRefSchema.nullable(),
+  assignee: stepAssigneeSchema.nullable(),
   formId: z.string().nullable(),
 });
 export type ProcessStep = z.infer<typeof processStepSchema>;
@@ -314,6 +324,10 @@ export const requestEventTypeSchema = z.enum([
 ]);
 export type RequestEventType = z.infer<typeof requestEventTypeSchema>;
 
+/** 指派給發起人 Manager 的 Task 改派給 Fallback Role 的原因。 */
+export const fallbackReasonSchema = z.enum(['no_manager', 'manager_deactivated']);
+export type FallbackReason = z.infer<typeof fallbackReasonSchema>;
+
 /** 時間軸的一列，直接對應一筆 request_event。 */
 export const requestEventSchema = z.object({
   id: z.number().int(),
@@ -330,6 +344,8 @@ export const requestEventSchema = z.object({
     })
     .nullable(),
   comment: z.string().nullable(),
+  /** task.created：發起人沒有 Manager 或 Manager 已停用，Task 改派給 Fallback Role 時的原因；其他為 null。 */
+  fallbackReason: fallbackReasonSchema.nullable(),
 });
 export type RequestEvent = z.infer<typeof requestEventSchema>;
 

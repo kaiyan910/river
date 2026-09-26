@@ -232,6 +232,10 @@ export const REQUEST_EVENT_TYPES = [
 ] as const;
 export type RequestEventType = (typeof REQUEST_EVENT_TYPES)[number];
 
+/** 指派給發起人 Manager 的 Task 改派給 Fallback Role 的原因：發起人沒有 Manager，或 Manager 已停用。 */
+export const FALLBACK_REASONS = ['no_manager', 'manager_deactivated'] as const;
+export type FallbackReason = (typeof FALLBACK_REASONS)[number];
+
 /** 稽核歷程：只能新增（資料庫 trigger 擋下 UPDATE 與 DELETE）。時間軸與「我的申請」直接讀這張表。 */
 export const requestEvents = pgTable(
   'request_events',
@@ -245,6 +249,8 @@ export const requestEvents = pgTable(
     actorId: uuid('actor_id').references(() => participants.id),
     taskId: uuid('task_id').references(() => tasks.id),
     comment: text('comment'),
+    /** task.created：Task 因為找不到有效的 Manager 而改派給 Fallback Role 時的原因；其他情況為 null。 */
+    fallbackReason: text('fallback_reason').$type<FallbackReason>(),
     at: timestamp('at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [index().on(t.requestId, t.id)],

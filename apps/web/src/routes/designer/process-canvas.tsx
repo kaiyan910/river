@@ -25,7 +25,15 @@ import {
   type NodeProps,
   Position,
 } from '@xyflow/react';
-import { CirclePlay, CircleStop, ClipboardPen, FileText, UserCheck, Users } from 'lucide-react';
+import {
+  CirclePlay,
+  CircleStop,
+  ClipboardPen,
+  FileText,
+  UserCheck,
+  UserRoundCheck,
+  Users,
+} from 'lucide-react';
 import { createContext, useCallback, useContext, useMemo, useState } from 'react';
 import { Avatar } from '@/components/people';
 import { directoryQueryOptions, roleDirectoryQueryOptions } from '@/lib/org';
@@ -230,10 +238,32 @@ function FormLine({ formId, required }: { formId?: string | null; required: bool
 
 function AssigneeLine({ assignee, missing }: { assignee: Assignee | null; missing: string }) {
   if (!assignee) return <div className="mt-1 text-[0.85em] text-destructive">{missing}</div>;
-  return assignee.type === 'role' ? (
-    <RoleLine roleId={assignee.roleId} />
-  ) : (
-    <PersonLine participantId={assignee.participantId} />
+  switch (assignee.type) {
+    case 'role':
+      return <RoleLine roleId={assignee.roleId} />;
+    case 'participant':
+      return <PersonLine participantId={assignee.participantId} />;
+    case 'manager':
+      return <ManagerLine fallbackRoleId={assignee.fallbackRoleId} />;
+  }
+}
+
+/** 發起人的 Manager，以及找不到有效 Manager 時接手的 Fallback Role。 */
+function ManagerLine({ fallbackRoleId }: { fallbackRoleId: string | null }) {
+  const { data: roles } = useQuery(roleDirectoryQueryOptions);
+  const role = roles?.find((r) => r.id === fallbackRoleId);
+  return (
+    <div className="mt-1 grid gap-0.5 text-[0.85em] text-muted-foreground">
+      <div className="flex items-center gap-1.5">
+        <UserRoundCheck size={14} aria-hidden className="shrink-0" />
+        <span className="truncate">發起人的 Manager</span>
+      </div>
+      {fallbackRoleId ? (
+        <span className="truncate pl-5 text-[0.9em]">後備：{role ? role.name : '…'}</span>
+      ) : (
+        <span className="pl-5 text-[0.9em] text-destructive">未設定 Fallback Role</span>
+      )}
+    </div>
   );
 }
 

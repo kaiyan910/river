@@ -198,14 +198,19 @@ describe('表單設計器與開始表單', () => {
     ).json()) as StartableProcess[];
     const process = list.find((p) => p.id === id);
     expect(process?.startForm).toEqual(trip);
-    expect(process?.steps.map((s) => [s.type, s.name, s.formId, s.assignee?.name ?? null])).toEqual(
-      [
-        ['start', '開始', 'trip', null],
-        ['form', '財務確認預支', 'advance', '林會計'],
-        ['approval', '主管審批', null, '陳主管'],
-        ['end', '結束', null, null],
-      ],
-    );
+    expect(
+      process?.steps.map((s) => [
+        s.type,
+        s.name,
+        s.formId,
+        s.assignee && 'name' in s.assignee ? s.assignee.name : null,
+      ]),
+    ).toEqual([
+      ['start', '開始', 'trip', null],
+      ['form', '財務確認預支', 'advance', '林會計'],
+      ['approval', '主管審批', null, '陳主管'],
+      ['end', '結束', null, null],
+    ]);
   });
 
   it('開始表單的資料不合法時拒絕發起，回報每個欄位的錯誤，也不會建立 Request', async () => {

@@ -16,7 +16,7 @@ import {
   requests,
   tasks,
 } from '@river/db';
-import { type Assignee, formIdOf } from '@river/dsl';
+import { formIdOf, type TaskAssignee } from '@river/dsl';
 import { and, asc, desc, eq, inArray, max, type SQL } from 'drizzle-orm';
 import {
   assigneeRef,
@@ -136,6 +136,7 @@ export class RequestReads {
             }
           : null,
         comment: e.comment,
+        fallbackReason: e.fallbackReason,
       };
     });
     return {
@@ -254,7 +255,7 @@ function returnedOf(t: TaskRow | undefined, names: Names): RequestSummary['retur
 }
 
 /** Task 的指派對象與實際處理的人。 */
-function taskPeople(t: TaskRow): (string | Assignee)[] {
+function taskPeople(t: TaskRow): (string | TaskAssignee)[] {
   return t.completedBy ? [taskAssignee(t), t.completedBy] : [taskAssignee(t)];
 }
 

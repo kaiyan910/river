@@ -1,11 +1,11 @@
 import { type Database, roleMembers, tasks } from '@river/db';
-import type { Assignee } from '@river/dsl';
+import type { TaskAssignee } from '@river/dsl';
 import { eq, inArray, or, type SQL } from 'drizzle-orm';
 
 type TaskAssignment = Pick<typeof tasks.$inferSelect, 'assigneeId' | 'roleId'>;
 
 /** Task 的指派對象；資料表以 check constraint 保證 assigneeId 與 roleId 剛好有一個。 */
-export function taskAssignee(t: TaskAssignment): Assignee {
+export function taskAssignee(t: TaskAssignment): TaskAssignee {
   if (t.roleId) return { type: 'role', roleId: t.roleId };
   if (t.assigneeId) return { type: 'participant', participantId: t.assigneeId };
   throw new Error('Task 沒有指派對象');

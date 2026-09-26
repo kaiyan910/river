@@ -779,9 +779,13 @@ function Inspector({
 const ASSIGNEE_MODES = [
   { key: 'participant', label: '特定人員' },
   { key: 'role', label: 'Role' },
+  { key: 'manager', label: 'Manager' },
 ] as const;
 
-/** 指派對象：特定 Participant，或一個 Role（任一成員都可以直接處理，最先送出的生效）。 */
+/**
+ * 指派對象：特定 Participant、一個 Role（任一成員都可以直接處理，最先送出的生效），
+ * 或發起人的 Manager（必須另外設定 Fallback Role）。
+ */
 function AssigneeField({
   label,
   assignee,
@@ -810,7 +814,8 @@ function AssigneeField({
               onClick={() => {
                 if (m.key === mode) return;
                 setMode(m.key);
-                onChange(null);
+                // 選 Manager 本身就是完整的指派方式，只差 Fallback Role（由檢查器提醒）。
+                onChange(m.key === 'manager' ? { type: 'manager', fallbackRoleId: null } : null);
               }}
               className={cn(
                 'cursor-pointer rounded px-2 py-0.5 text-muted-foreground',
@@ -822,18 +827,34 @@ function AssigneeField({
           ))}
         </div>
       </div>
-      {mode === 'participant' ? (
+      {mode === 'participant' && (
         <ParticipantAssignee
           participantId={assignee?.type === 'participant' ? assignee.participantId : null}
           onChange={(participantId) =>
             onChange(participantId ? { type: 'participant', participantId } : null)
           }
         />
-      ) : (
+      )}
+      {mode === 'role' && (
         <RoleAssignee
           roleId={assignee?.type === 'role' ? assignee.roleId : null}
           onChange={(roleId) => onChange(roleId ? { type: 'role', roleId } : null)}
         />
+      )}
+      {mode === 'manager' && (
+        <>
+          <p className="text-[0.85em]">
+            Task 指派給發起人的 Manager。發起人沒有 Manager，或 Manager 已停用時，改派給 Fallback
+            Role。
+          </p>
+          <RoleAssignee
+            label="Fallback Role"
+            placeholder="選擇 Fallback Role…"
+            hint="發起人沒有有效的 Manager 時，由這個 Role 的任一成員處理。"
+            roleId={assignee?.type === 'manager' ? assignee.fallbackRoleId : null}
+            onChange={(fallbackRoleId) => onChange({ type: 'manager', fallbackRoleId })}
+          />
+        </>
       )}
     </div>
   );
@@ -842,9 +863,15 @@ function AssigneeField({
 function RoleAssignee({
   roleId,
   onChange,
+  label = 'Role',
+  placeholder = '選擇 Role…',
+  hint = 'Role 的每位成員都會看到這個 Task，不需要認領；最先送出的決定生效。',
 }: {
   roleId: string | null;
   onChange: (roleId: string | null) => void;
+  label?: string;
+  placeholder?: string;
+  hint?: string;
 }) {
   const roles = useQuery(roleDirectoryQueryOptions);
   const role = roles.data?.find((r) => r.id === roleId);
@@ -857,14 +884,14 @@ function RoleAssignee({
           className="-translate-y-1/2 pointer-events-none absolute top-1/2 left-2 text-muted-foreground"
         />
         <select
-          aria-label="Role"
+          aria-label={label}
           value={roleId ?? ''}
           disabled={roles.isPending}
           aria-invalid={!roleId || undefined}
           onChange={(e) => onChange(e.target.value || null)}
           className="h-[2.5em] w-full rounded-lg border border-input bg-card pr-2 pl-7 aria-invalid:border-destructive"
         >
-          <option value="">選擇 Role…</option>
+          <option value="">{placeholder}</option>
           {roles.data?.map((r) => (
             <option key={r.id} value={r.id}>
               {r.name}（{r.memberCount} 人）
@@ -873,9 +900,7 @@ function RoleAssignee({
         </select>
       </div>
       <p className="text-[0.8em] text-muted-foreground">
-        {role && role.memberCount === 0
-          ? '這個 Role 目前沒有成員，Task 會沒有人可以處理。'
-          : 'Role 的每位成員都會看到這個 Task，不需要認領；最先送出的決定生效。'}
+        {role && role.memberCount === 0 ? '這個 Role 目前沒有成員，Task 會沒有人可以處理。' : hint}
       </p>
       {roles.isError && <p className="text-[0.85em] text-destructive">{roles.error.message}</p>}
     </>

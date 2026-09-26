@@ -10,6 +10,7 @@ export const DSL_ERROR_CODES = [
   'APPROVAL_NO_ASSIGNEE',
   'FORM_NODE_NO_FORM',
   'FORM_NODE_NO_ASSIGNEE',
+  'MANAGER_NO_FALLBACK_ROLE',
   'NODE_FORM_MISSING',
   ...FORM_ERROR_CODES,
 ] as const;
@@ -79,6 +80,18 @@ export function checkProcess(dsl: ProcessDsl): DslError[] {
         nodeId: node.id,
         code: 'APPROVAL_NO_ASSIGNEE',
         message: `「${node.name}」還沒有指派審批人。`,
+      });
+
+  for (const node of dsl.nodes)
+    if (
+      (node.type === 'approval' || node.type === 'form') &&
+      node.assignee?.type === 'manager' &&
+      !node.assignee.fallbackRoleId
+    )
+      errors.push({
+        nodeId: node.id,
+        code: 'MANAGER_NO_FALLBACK_ROLE',
+        message: `「${node.name}」指派給發起人的 Manager，必須設定 Fallback Role。`,
       });
 
   const formIds = new Set(dsl.forms.map((f) => f.id));

@@ -6,7 +6,7 @@ import {
   type TaskCompletedSignal,
   WITHDRAW_SIGNAL,
 } from '@river/contracts/workflow';
-import type { ProcessNode } from '@river/dsl';
+import type { Assignee, ProcessNode } from '@river/dsl';
 import {
   ApplicationFailure,
   condition,
@@ -16,7 +16,7 @@ import {
   setHandler,
   uuid4,
 } from '@temporalio/workflow';
-import type { Activities } from '../activities.js';
+import type { Activities, CreateTaskInput } from '../activities.js';
 
 const { loadProcessVersion, createTask, completeRequest } = proxyActivities<Activities>({
   startToCloseTimeout: '30 seconds',
@@ -72,8 +72,9 @@ export async function interpretProcess({
     if (node.type === 'approval' || node.type === 'form') {
       // 發佈前檢查（APPROVAL_NO_ASSIGNEE、FORM_NODE_NO_ASSIGNEE）已經擋下；
       // 萬一出現，寧可讓 workflow 失敗也不要跳過這一步。
-      if (!node.assignee)
-        throw ApplicationFailure.nonRetryable(`節點「${node.name}」沒有指派處理人`);
+      // 指派給 Manager 卻沒有 Fallback Role（MANAGER_NO_FALLBACK_ROLE）也一樣。
+      const assignment = node.assignee && assignmentOf(node.assignee);
+      if (!assignment) throw ApplicationFailure.nonRetryable(`節點「${node.name}」沒有指派處理人`);
       const taskId = uuid4();
       const created = await createTask({
         requestId,
@@ -81,9 +82,7 @@ export async function interpretProcess({
         nodeId: node.id,
         nodeName: node.name,
         kind: node.type,
-        ...(node.assignee.type === 'participant'
-          ? { assigneeId: node.assignee.participantId }
-          : { roleId: node.assignee.roleId }),
+        ...assignment,
       });
       // Request 已經不是 running（被 Withdraw 但 Signal 沒送到）：沒有 Task 可等，直接結束。
       // 舊版 activity 沒有回傳值（undefined），所以只認 false，重播舊 history 時行為不變。
@@ -102,4 +101,24 @@ export async function interpretProcess({
       round: latestRound,
     });
   await completeRequest(requestId);
+}
+
+/**
+ * 節點的指派對象轉成 createTask 的參數；指派給 Manager 卻沒有 Fallback Role 時為 null。
+ * 指派給 Participant 或 Role 時參數與舊版相同；指派給 Manager 是新的節點設定，
+ * 舊的 history 裡不會出現，所以不需要 patched()。
+ */
+function assignmentOf(
+  assignee: Assignee,
+): Pick<CreateTaskInput, 'assigneeId' | 'roleId' | 'initiatorManager'> | null {
+  switch (assignee.type) {
+    case 'participant':
+      return { assigneeId: assignee.participantId };
+    case 'role':
+      return { roleId: assignee.roleId };
+    case 'manager':
+      return assignee.fallbackRoleId
+        ? { initiatorManager: { fallbackRoleId: assignee.fallbackRoleId } }
+        : null;
+  }
 }

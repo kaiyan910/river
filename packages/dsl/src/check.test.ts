@@ -133,6 +133,50 @@ describe('DSL 檢查', () => {
     expect(checkProcess(dsl)).toEqual([]);
   });
 
+  it('審批與填表節點可以指派給發起人的 Manager，並設定 Fallback Role', () => {
+    const manager = { type: 'manager' as const, fallbackRoleId: 'r-hr' };
+    const dsl: ProcessDsl = {
+      nodes: [
+        start(),
+        { ...formNode('register'), assignee: manager } as ProcessNode,
+        { ...approval('approve'), assignee: manager } as ProcessNode,
+        end(),
+      ],
+      edges: [edge('start', 'register'), edge('register', 'approve'), edge('approve', 'end')],
+      forms: [advance],
+    };
+
+    expect(processDslSchema.parse(dsl)).toEqual(dsl);
+    expect(checkProcess(dsl)).toEqual([]);
+  });
+
+  it('指派給 Manager 的節點必須設定 Fallback Role', () => {
+    const noFallback = { type: 'manager' as const, fallbackRoleId: null };
+    const dsl: ProcessDsl = {
+      nodes: [
+        start(),
+        { ...formNode('register'), assignee: noFallback } as ProcessNode,
+        { ...approval('approve'), assignee: noFallback } as ProcessNode,
+        end(),
+      ],
+      edges: [edge('start', 'register'), edge('register', 'approve'), edge('approve', 'end')],
+      forms: [advance],
+    };
+
+    expect(checkProcess(dsl)).toEqual([
+      {
+        nodeId: 'register',
+        code: 'MANAGER_NO_FALLBACK_ROLE',
+        message: expect.stringContaining('填表 register'),
+      },
+      {
+        nodeId: 'approve',
+        code: 'MANAGER_NO_FALLBACK_ROLE',
+        message: expect.stringContaining('審批 approve'),
+      },
+    ]);
+  });
+
   it('節點名稱不能空白', () => {
     const dsl = minimal();
     dsl.nodes[1] = { ...approval('manager'), name: '  ' };

@@ -14,7 +14,7 @@ import type { ReactNode } from 'react';
 import { FormDataView } from '@/components/form-fields';
 import { Avatar } from '@/components/people';
 import { Input } from '@/components/ui/input';
-import { assigneeLabel, isAdvancing, requestNumber } from '@/lib/requests';
+import { assigneeLabel, FALLBACK_REASON_LABELS, isAdvancing, requestNumber } from '@/lib/requests';
 import { formatTime } from '@/lib/time';
 import { cn } from '@/lib/utils';
 
@@ -331,8 +331,12 @@ function describeEvent(e: RequestEvent): string {
   switch (e.type) {
     case 'request.started':
       return `${e.actor?.name} 發起申請`;
-    case 'task.created':
-      return `流轉到「${e.task?.nodeName}」，等待 ${e.task && assigneeLabel(e.task.assignee)} 處理`;
+    case 'task.created': {
+      const waiting = `流轉到「${e.task?.nodeName}」，等待 ${e.task && assigneeLabel(e.task.assignee)} 處理`;
+      return e.fallbackReason
+        ? `${waiting}（${FALLBACK_REASON_LABELS[e.fallbackReason]}，改派給 Fallback Role）`
+        : waiting;
+    }
     case 'task.completed':
       return e.task?.kind === 'form'
         ? `${e.actor?.name} 在「${e.task?.nodeName}」送出表單`

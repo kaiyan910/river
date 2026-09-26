@@ -1,5 +1,5 @@
 import {
-  type AssigneeRef,
+  type FallbackReason,
   type FormRejected,
   formRejectedSchema,
   type MyTasksStatus,
@@ -9,6 +9,7 @@ import {
   type ResubmitRequestInput,
   requestDetailSchema,
   requestSummaryListSchema,
+  type StepAssignee,
   startableProcessListSchema,
 } from '@river/contracts';
 import { queryOptions, useMutation, useQueryClient } from '@tanstack/react-query';
@@ -135,10 +136,17 @@ export function formRejection(error: unknown): FormRejected | null {
   return parsed.success ? parsed.data : null;
 }
 
-/** 畫面上的指派對象：人名，或「財務審批人」任一成員。 */
-export function assigneeLabel(a: AssigneeRef): string {
+/** 畫面上的指派對象：人名、「財務審批人」任一成員，或發起人的 Manager。 */
+export function assigneeLabel(a: StepAssignee): string {
+  if (a.type === 'manager') return '發起人的 Manager';
   return a.type === 'role' ? `「${a.name}」任一成員` : a.name;
 }
+
+/** 指派給 Manager 的 Task 改派給 Fallback Role 的原因。 */
+export const FALLBACK_REASON_LABELS: Record<FallbackReason, string> = {
+  no_manager: '發起人沒有 Manager',
+  manager_deactivated: '發起人的 Manager 已停用',
+};
 
 /** R-000042 */
 export function requestNumber(n: number): string {
