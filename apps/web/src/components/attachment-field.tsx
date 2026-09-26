@@ -6,12 +6,12 @@ import {
   type FormField,
   maxAttachmentBytes,
 } from '@river/forms';
-import { Download, Paperclip, Upload, X } from 'lucide-react';
-import { createContext, useContext, useId, useRef, useState } from 'react';
+import { Download, ImageIcon, Paperclip, Upload, X } from 'lucide-react';
+import { createContext, useContext, useEffect, useId, useRef, useState } from 'react';
 import { toast } from '@/components/toast';
 import { Button } from '@/components/ui/button';
 import { ApiError } from '@/lib/api';
-import { downloadAttachment, uploadAttachment } from '@/lib/attachments';
+import { attachmentUrl, downloadAttachment, uploadAttachment } from '@/lib/attachments';
 import { cn } from '@/lib/utils';
 
 /** 上傳與下載的實作；表單設計器的即時預覽換成不連線的版本。 */
@@ -19,11 +19,14 @@ export interface AttachmentTransport {
   upload: (file: File) => Promise<AttachmentRef>;
   /** 沒有時（預覽）不顯示下載。 */
   download?: (id: string) => Promise<void>;
+  /** 圖片預覽用的 URL；沒有時（預覽）點圖片不會開啟預覽。 */
+  url?: (id: string) => Promise<string>;
 }
 
 const AttachmentTransportContext = createContext<AttachmentTransport>({
   upload: uploadAttachment,
   download: downloadAttachment,
+  url: attachmentUrl,
 });
 export const AttachmentTransportProvider = AttachmentTransportContext.Provider;
 
@@ -44,6 +47,11 @@ export function attachmentsFrom(value: unknown): AttachmentRef[] {
     const parsed = attachmentRefSchema.safeParse(v);
     return parsed.success ? [parsed.data] : [];
   });
+}
+
+/** 瀏覽器能直接顯示的圖片，點擊時開啟預覽而不是下載。 */
+export function isPreviewableImage(a: AttachmentRef): boolean {
+  return /^image\/(png|jpe?g|gif|webp|avif|bmp|svg\+xml)$/i.test(a.contentType);
 }
 
 export function formatSize(bytes: number): string {
@@ -161,7 +169,7 @@ export function AttachmentInput({
   );
 }
 
-/** 附件清單：可以下載；編輯時可以移除。 */
+/** 附件清單：可以下載，圖片點擊後先預覽；編輯時可以移除。 */
 export function AttachmentList({
   files,
   onRemove,
@@ -169,52 +177,159 @@ export function AttachmentList({
   files: AttachmentRef[];
   onRemove?: (file: AttachmentRef) => void;
 }) {
-  const { download } = useContext(AttachmentTransportContext);
+  const { download, url } = useContext(AttachmentTransportContext);
+  const [previewing, setPreviewing] = useState<AttachmentRef | null>(null);
+
+  function save(a: AttachmentRef) {
+    download?.(a.id).catch((error) =>
+      toast(error instanceof ApiError ? error.message : '下載失敗，請稍後再試。', 'error'),
+    );
+  }
+
   return (
-    <ul className="grid gap-1">
-      {files.map((a) => (
-        <li
-          key={a.id}
-          className="flex min-w-0 items-center gap-2 rounded-lg border bg-card px-2.5 py-1.5"
-        >
-          <Paperclip className="size-4 shrink-0 text-muted-foreground" />
-          {download ? (
-            <button
-              type="button"
-              className="min-w-0 cursor-pointer truncate text-left underline-offset-2 hover:underline"
-              onClick={() =>
-                download(a.id).catch((error) =>
-                  toast(
-                    error instanceof ApiError ? error.message : '下載失敗，請稍後再試。',
-                    'error',
-                  ),
-                )
-              }
-            >
-              {a.name}
-            </button>
-          ) : (
-            <span className="min-w-0 truncate">{a.name}</span>
-          )}
+    <>
+      <ul className="grid gap-1">
+        {files.map((a) => (
+          <li
+            key={a.id}
+            className="flex min-w-0 items-center gap-2 rounded-lg border bg-card px-2.5 py-1.5"
+          >
+            {isPreviewableImage(a) ? (
+              <ImageIcon className="size-4 shrink-0 text-muted-foreground" />
+            ) : (
+              <Paperclip className="size-4 shrink-0 text-muted-foreground" />
+            )}
+            {download ? (
+              <button
+                type="button"
+                className="min-w-0 cursor-pointer truncate text-left underline-offset-2 hover:underline"
+                onClick={() => (url && isPreviewableImage(a) ? setPreviewing(a) : save(a))}
+              >
+                {a.name}
+              </button>
+            ) : (
+              <span className="min-w-0 truncate">{a.name}</span>
+            )}
+            <span className="shrink-0 font-mono text-[0.82em] text-muted-foreground">
+              {formatSize(a.size)}
+            </span>
+            <span className="flex-1" />
+            {download && !onRemove && (
+              <Download className="size-4 shrink-0 text-muted-foreground" aria-hidden />
+            )}
+            {onRemove && (
+              <button
+                type="button"
+                aria-label={`移除 ${a.name}`}
+                className="cursor-pointer rounded p-0.5 text-muted-foreground hover:text-destructive"
+                onClick={() => onRemove(a)}
+              >
+                <X className="size-4" />
+              </button>
+            )}
+          </li>
+        ))}
+      </ul>
+      {previewing && url && (
+        <ImagePreview
+          file={previewing}
+          url={url}
+          onDownload={download && (() => save(previewing))}
+          onClose={() => setPreviewing(null)}
+        />
+      )}
+    </>
+  );
+}
+
+/** 圖片附件的預覽：開啟時才取得短效 URL；Esc 或點背景關閉。 */
+function ImagePreview({
+  file,
+  url,
+  onDownload,
+  onClose,
+}: {
+  file: AttachmentRef;
+  url: (id: string) => Promise<string>;
+  onDownload?: () => void;
+  onClose: () => void;
+}) {
+  const titleId = useId();
+  const [src, setSrc] = useState<string | null>(null);
+  const [problem, setProblem] = useState<string | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    url(file.id).then(
+      (u) => active && setSrc(u),
+      (error) =>
+        active &&
+        setProblem(error instanceof ApiError ? error.message : '無法載入圖片，請稍後再試。'),
+    );
+    return () => {
+      active = false;
+    };
+  }, [file.id, url]);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
+  return (
+    // biome-ignore lint/a11y/noStaticElementInteractions: 點背景關閉是額外的捷徑，鍵盤可用 Esc 或關閉按鈕
+    // biome-ignore lint/a11y/useKeyWithClickEvents: 同上
+    <div
+      className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-4"
+      onClick={(e) => e.target === e.currentTarget && onClose()}
+    >
+      <div
+        role="dialog"
+        aria-modal
+        aria-labelledby={titleId}
+        className="grid max-h-[92vh] w-full max-w-4xl grid-rows-[auto_minmax(0,1fr)] gap-3 rounded-xl border bg-card p-4 shadow-xl"
+      >
+        <div className="flex min-w-0 items-center gap-2">
+          <h2 id={titleId} className="min-w-0 truncate font-semibold">
+            {file.name}
+          </h2>
           <span className="shrink-0 font-mono text-[0.82em] text-muted-foreground">
-            {formatSize(a.size)}
+            {formatSize(file.size)}
           </span>
           <span className="flex-1" />
-          {download && !onRemove && (
-            <Download className="size-4 shrink-0 text-muted-foreground" aria-hidden />
+          {onDownload && (
+            <Button type="button" variant="outline" size="sm" onClick={onDownload}>
+              <Download className="size-4" />
+              下載
+            </Button>
           )}
-          {onRemove && (
-            <button
-              type="button"
-              aria-label={`移除 ${a.name}`}
-              className="cursor-pointer rounded p-0.5 text-muted-foreground hover:text-destructive"
-              onClick={() => onRemove(a)}
-            >
-              <X className="size-4" />
-            </button>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            aria-label="關閉預覽"
+            onClick={onClose}
+            autoFocus
+          >
+            <X className="size-4" />
+          </Button>
+        </div>
+        <div className="grid min-h-40 place-items-center overflow-auto rounded-lg bg-muted">
+          {problem ? (
+            <p className="p-6 text-destructive">{problem}</p>
+          ) : src ? (
+            <img
+              src={src}
+              alt={file.name}
+              className="max-h-[80vh] max-w-full object-contain"
+              onError={() => setProblem('這張圖片無法在瀏覽器顯示，請下載後查看。')}
+            />
+          ) : (
+            <p className="p-6 text-muted-foreground">載入圖片…</p>
           )}
-        </li>
-      ))}
-    </ul>
+        </div>
+      </div>
+    </div>
   );
 }

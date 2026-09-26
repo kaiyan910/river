@@ -25,8 +25,16 @@ export async function uploadAttachment(file: File): Promise<AttachmentRef> {
   return attachment;
 }
 
-/** 下載附件：取得短效的 presigned 下載 URL 後直接前往（回應帶 Content-Disposition，瀏覽器會存檔）。 */
-export async function downloadAttachment(id: string): Promise<void> {
+/**
+ * 附件的短效 presigned 下載 URL。回應帶 Content-Disposition: attachment，
+ * 直接前往時瀏覽器會存檔；當作 <img> 的來源則照常顯示。
+ */
+export async function attachmentUrl(id: string): Promise<string> {
   const { url } = await api(`/attachments/${id}/download`, { schema: attachmentDownloadSchema });
-  window.location.assign(url);
+  return url;
+}
+
+/** 下載附件：取得 presigned 下載 URL 後直接前往，瀏覽器會存檔。 */
+export async function downloadAttachment(id: string): Promise<void> {
+  window.location.assign(await attachmentUrl(id));
 }
