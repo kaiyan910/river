@@ -137,6 +137,7 @@ export class RequestReads {
           : null,
         comment: e.comment,
         fallbackReason: e.fallbackReason,
+        node: e.nodeId ? { id: e.nodeId, name: nodeNames.get(e.nodeId) ?? e.nodeId } : null,
       };
     });
     return {

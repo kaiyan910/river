@@ -17,6 +17,7 @@ export const DSL_ERROR_CODES = [
   'CONDITION_MULTIPLE_DEFAULTS',
   'CONDITION_EDGE_NO_EXPRESSION',
   'INVALID_JSONATA',
+  'AUTO_APPROVAL_NO_EXPRESSION',
   ...FORM_ERROR_CODES,
 ] as const;
 export type DslErrorCode = (typeof DSL_ERROR_CODES)[number];
@@ -24,7 +25,7 @@ export type DslErrorCode = (typeof DSL_ERROR_CODES)[number];
 export interface DslError {
   /** 出錯的節點；整份流程層級與 Form 本身的錯誤為 null。 */
   nodeId: string | null;
-  /** 條件節點某一條出邊的錯誤：哪一條出邊（nodeId 是條件節點）。 */
+  /** 條件節點某一條出邊的錯誤：哪一條出邊（nodeId 是條件節點）。審批節點 Auto-approval 的錯誤沒有這個欄位。 */
   edgeId?: string;
   code: DslErrorCode;
   message: string;
@@ -88,6 +89,26 @@ export function checkProcess(dsl: ProcessDsl): DslError[] {
         code: 'APPROVAL_NO_ASSIGNEE',
         message: `「${node.name}」還沒有指派審批人。`,
       });
+
+  for (const node of dsl.nodes) {
+    if (node.type !== 'approval' || !node.autoApprove) continue;
+    const expression = node.autoApprove.expression.trim();
+    if (!expression) {
+      errors.push({
+        nodeId: node.id,
+        code: 'AUTO_APPROVAL_NO_EXPRESSION',
+        message: `「${node.name}」啟用了自動核准，必須設定條件。`,
+      });
+      continue;
+    }
+    const syntaxError = jsonataSyntaxError(expression);
+    if (syntaxError)
+      errors.push({
+        nodeId: node.id,
+        code: 'INVALID_JSONATA',
+        message: `「${node.name}」自動核准條件的 JSONata 表達式有語法錯誤：${syntaxError}`,
+      });
+  }
 
   for (const node of dsl.nodes)
     if (

@@ -50,11 +50,24 @@ export const startNodeSchema = z.object({
   formId: formRefSchema,
 });
 export const endNodeSchema = z.object({ ...nodeBase, type: z.literal('end') });
-/** 審批節點；草稿中可以還沒指派（null），發佈前由檢查器擋下。 */
+/**
+ * 審批節點的 Auto-approval：流程走到這一步時，表達式的結果是 true 就由系統直接核准，不建立 Task。
+ * 表達式和條件分支一樣用欄位代碼讀取這一輪填過的 Form 資料，例如 `amount < 1000`。
+ * 草稿中表達式可以是空白或有語法錯誤，發佈前由檢查器擋下。
+ */
+export const autoApproveSchema = z.object({ expression: z.string().max(2000) });
+export type AutoApprove = z.infer<typeof autoApproveSchema>;
+
+/**
+ * 審批節點；草稿中可以還沒指派（null），發佈前由檢查器擋下。
+ * 設定了 Auto-approval 的節點仍然必須指派審批人：條件不成立或無法判斷時交給審批人。
+ * 舊的 DSL 沒有 autoApprove，視同沒有設定。
+ */
 export const approvalNodeSchema = z.object({
   ...nodeBase,
   type: z.literal('approval'),
   assignee: assigneeSchema.nullable(),
+  autoApprove: autoApproveSchema.nullish(),
 });
 
 /** 填表節點：指派一位 Participant、一個 Role 或發起人的 Manager 填一份 Form；發佈前兩者都必須設定。 */

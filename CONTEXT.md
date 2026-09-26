@@ -78,6 +78,10 @@ _Avoid_: Instance, case, ticket, 工單
 Request 流轉到人工步驟時產生、指派給特定人、某個 Role 或發起人的 Manager 處理的一項待辦（填表或審批）。指派給 Role 時不需要認領，任一成員都可以直接處理，最先送出的決定生效。
 _Avoid_: Todo, job, work item
 
+**Auto-approval**（自動核准）:
+Designer 在審批步驟上設定的條件成立時，由系統直接核准這一步，不產生 Task；Request 的歷程會記錄這一步是自動核准的。條件無法判斷時一律交給人審批。逾時永遠不會觸發 Auto-approval。
+_Avoid_: Skip, bypass, 免審
+
 **Return**:
 審批人不同意時，把 Request 退回給發起人修改；重新送出後從 Process 的開頭再跑一次，先前的核准全部失效，Request 本身不會結束。
 _Avoid_: Reject（與終止混淆）, 打回

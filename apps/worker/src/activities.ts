@@ -10,9 +10,9 @@ import {
   tasks,
 } from '@river/db';
 import type { ProcessDsl } from '@river/dsl';
-import { chooseBranch } from '@river/dsl/branch';
+import { chooseBranch, shouldAutoApprove } from '@river/dsl/branch';
 import { ApplicationFailure, log } from '@temporalio/activity';
-import { and, asc, eq, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, sql } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
 
 export interface CreateTaskInput {
@@ -35,6 +35,13 @@ export interface EvaluateConditionInput {
   requestId: string;
   processVersionId: string;
   /** 條件節點的 ID。 */
+  nodeId: string;
+}
+
+export interface EvaluateAutoApprovalInput {
+  requestId: string;
+  processVersionId: string;
+  /** 設定了 Auto-approval 的審批節點的 ID。 */
   nodeId: string;
 }
 
@@ -113,42 +120,64 @@ export function createActivities(db: Database) {
     /**
      * 從 Postgres 讀取條件節點的出邊與這一輪填過的 Form 資料，執行 JSONata，只回傳選中的出邊 ID：
      * Form 資料與表達式的結果都不進 Temporal history，表達式用到 $now() 也不影響 workflow 的 determinism。
-     * 同一個欄位代碼在多份 Form 都出現時，以最後填寫的為準。
      */
     async evaluateCondition(input: EvaluateConditionInput): Promise<string> {
-      const [version] = await db
-        .select({ dsl: processVersions.dsl })
-        .from(processVersions)
-        .where(eq(processVersions.id, input.processVersionId));
-      if (!version)
-        throw ApplicationFailure.nonRetryable(`找不到 Process Version ${input.processVersionId}`);
-      const [request] = await db
-        .select({ round: requests.round })
-        .from(requests)
-        .where(eq(requests.id, input.requestId));
-      if (!request) throw new Error(`找不到 Request ${input.requestId}`);
-      const rows = await db
-        .select({ data: requestData.data })
-        .from(requestData)
-        .where(
-          and(eq(requestData.requestId, input.requestId), eq(requestData.round, request.round)),
-        )
-        .orderBy(asc(requestData.submittedAt));
-      const data = Object.assign({}, ...rows.map((r) => r.data));
-
-      const outgoing = version.dsl.edges.filter((e) => e.source === input.nodeId);
+      const { dsl, data } = await loadRound(db, input);
+      const outgoing = dsl.edges.filter((e) => e.source === input.nodeId);
       // 只記錄出錯的出邊與 JSONata 的錯誤代碼，不記錄 Form 資料。
       const edgeId = await chooseBranch(outgoing, data, (id, error) =>
         log.warn('條件表達式執行失敗，視為不成立', {
           requestId: input.requestId,
           nodeId: input.nodeId,
           edgeId: id,
-          code: (error as { code?: unknown } | null)?.code,
+          code: jsonataErrorCode(error),
         }),
       );
       // 發佈前檢查（CONDITION_NO_DEFAULT）已經擋下；萬一出現，寧可讓 workflow 失敗也不要亂走。
       if (!edgeId) throw ApplicationFailure.nonRetryable(`條件節點 ${input.nodeId} 沒有預設出邊`);
       return edgeId;
+    },
+
+    /**
+     * 審批節點的 Auto-approval：和 evaluateCondition 一樣從 Postgres 讀取這一輪的資料並執行 JSONata，只回傳是否自動核准。
+     * 成立時先鎖住 Request，仍是 running 才寫入 step.auto_approved 事件；不建立 Task，也不通知任何人。
+     * 不成立、執行時出錯，或 Request 已經不是 running 都回傳 false，由 workflow 照常建立 Task（往安全的方向失敗；
+     * Request 已經結束時 createTask 不會建立）。
+     * 重試時以已經寫入的事件為準，不重新判斷（表達式用到 $now() 時結果可能不同）：
+     * 最後一筆事件是這一步的自動核准，就表示上一次已經寫入。workflow 走到這一步時沒有 open 的 Task，
+     * 其他事件只會來自 Withdraw，而 Withdraw 會讓 Request 不再是 running。
+     */
+    async evaluateAutoApproval(input: EvaluateAutoApprovalInput): Promise<boolean> {
+      if (await lastEventIsAutoApproval(db, input)) return true;
+      const { dsl, data } = await loadRound(db, input);
+      const node = dsl.nodes.find((n) => n.id === input.nodeId);
+      const expression = node?.type === 'approval' ? node.autoApprove?.expression : undefined;
+      if (!expression?.trim()) return false;
+      // 只記錄 JSONata 的錯誤代碼，不記錄 Form 資料。
+      const approved = await shouldAutoApprove(expression, data, (error) =>
+        log.warn('自動核准條件執行失敗，交給審批人', {
+          requestId: input.requestId,
+          nodeId: input.nodeId,
+          code: jsonataErrorCode(error),
+        }),
+      );
+      if (!approved) return false;
+
+      return db.transaction(async (tx) => {
+        const [request] = await tx
+          .select({ status: requests.status })
+          .from(requests)
+          .where(eq(requests.id, input.requestId))
+          .for('update');
+        if (request?.status !== 'running') return false;
+        if (await lastEventIsAutoApproval(tx, input)) return true;
+        await tx.insert(requestEvents).values({
+          requestId: input.requestId,
+          type: 'step.auto_approved',
+          nodeId: input.nodeId,
+        });
+        return true;
+      });
     },
 
     async completeRequest(requestId: string): Promise<void> {
@@ -173,6 +202,52 @@ interface Assignment {
   assigneeId: string | null;
   roleId: string | null;
   fallbackReason?: FallbackReason;
+}
+
+/** JSONata 的錯誤代碼（例如 T2001）；log 只記這個，不記錄可能含有 Form 資料的錯誤訊息。 */
+function jsonataErrorCode(error: unknown): unknown {
+  return (error as { code?: unknown } | null)?.code;
+}
+
+/** Request 的最後一筆事件是不是這一步的自動核准（evaluateAutoApproval 重試時已經寫入）。 */
+async function lastEventIsAutoApproval(
+  db: Database | Tx,
+  input: { requestId: string; nodeId: string },
+): Promise<boolean> {
+  const [last] = await db
+    .select({ type: requestEvents.type, nodeId: requestEvents.nodeId })
+    .from(requestEvents)
+    .where(eq(requestEvents.requestId, input.requestId))
+    .orderBy(desc(requestEvents.id))
+    .limit(1);
+  return last?.type === 'step.auto_approved' && last.nodeId === input.nodeId;
+}
+
+/**
+ * 讀取 Process Version 的 DSL 與 Request 這一輪填過的 Form 資料（鍵是欄位代碼）。
+ * 同一個欄位代碼在多份 Form 都出現時，以最後填寫的為準。
+ */
+async function loadRound(
+  db: Database,
+  input: { requestId: string; processVersionId: string },
+): Promise<{ dsl: ProcessDsl; data: Record<string, unknown> }> {
+  const [version] = await db
+    .select({ dsl: processVersions.dsl })
+    .from(processVersions)
+    .where(eq(processVersions.id, input.processVersionId));
+  if (!version)
+    throw ApplicationFailure.nonRetryable(`找不到 Process Version ${input.processVersionId}`);
+  const [request] = await db
+    .select({ round: requests.round })
+    .from(requests)
+    .where(eq(requests.id, input.requestId));
+  if (!request) throw new Error(`找不到 Request ${input.requestId}`);
+  const rows = await db
+    .select({ data: requestData.data })
+    .from(requestData)
+    .where(and(eq(requestData.requestId, input.requestId), eq(requestData.round, request.round)))
+    .orderBy(asc(requestData.submittedAt));
+  return { dsl: version.dsl, data: Object.assign({}, ...rows.map((r) => r.data)) };
 }
 
 /** 發起人有有效（沒有停用）的 Manager 時指派給 Manager，否則改派給 Fallback Role 並記下原因。 */

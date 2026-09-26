@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { chooseBranch } from './branch.js';
+import { chooseBranch, shouldAutoApprove } from './branch.js';
 import type { ProcessEdge } from './schema.js';
 
 const when = (id: string, expression: string): ProcessEdge => ({
@@ -53,5 +53,29 @@ describe('選擇條件節點的出邊', () => {
 
   it('沒有預設出邊又沒有條件成立時回傳 null', async () => {
     expect(await chooseBranch([when('gm', 'amount > 1')], { amount: 0 })).toBeNull();
+  });
+});
+
+describe('判斷是否自動核准', () => {
+  it('結果是 true 時自動核准', async () => {
+    expect(await shouldAutoApprove('amount < 1000', { amount: 800 })).toBe(true);
+  });
+
+  it('結果是 false、不是 true（truthy 也不算）或欄位沒有填時不自動核准', async () => {
+    expect(await shouldAutoApprove('amount < 1000', { amount: 5000 })).toBe(false);
+    expect(await shouldAutoApprove('amount', { amount: 1 })).toBe(false);
+    expect(await shouldAutoApprove('amount < 1000', {})).toBe(false);
+  });
+
+  it('執行時出錯時不自動核准，並回報錯誤', async () => {
+    const errors: unknown[] = [];
+    expect(
+      await shouldAutoApprove('$number(note) < 1', { note: 'abc' }, (e) => errors.push(e)),
+    ).toBe(false);
+    expect(errors).toHaveLength(1);
+  });
+
+  it('語法錯誤時不自動核准', async () => {
+    expect(await shouldAutoApprove('amount <', { amount: 1 })).toBe(false);
   });
 });

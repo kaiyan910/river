@@ -36,6 +36,7 @@ import {
   UserCheck,
   UserRoundCheck,
   Users,
+  Zap,
 } from 'lucide-react';
 import { createContext, useCallback, useContext, useMemo, useState } from 'react';
 import { Avatar } from '@/components/people';
@@ -258,6 +259,12 @@ function NodeCard({ data, selected, type }: NodeProps<RFNode>) {
           assignee={data.node.assignee}
           missing={data.node.type === 'form' ? '未指派填表人' : '未指派審批人'}
         />
+      )}
+      {data.node.type === 'approval' && data.node.autoApprove && (
+        <div className="mt-1.5 flex items-center gap-1 rounded-md bg-accent px-1.5 py-0.5 text-[0.8em] text-accent-foreground">
+          <Zap size={12} aria-hidden className="shrink-0" />
+          <span className="truncate">條件成立時自動核准</span>
+        </div>
       )}
       {type === 'condition' && (
         <div className="mt-1 text-[0.85em] text-muted-foreground">依 Form 資料走不同的出邊</div>

@@ -320,6 +320,7 @@ export const requestEventTypeSchema = z.enum([
   'task.completed',
   'task.returned',
   'task.superseded',
+  'step.auto_approved',
   'request.resubmitted',
   'request.withdrawn',
   'request.completed',
@@ -348,6 +349,8 @@ export const requestEventSchema = z.object({
   comment: z.string().nullable(),
   /** task.created：發起人沒有 Manager 或 Manager 已停用，Task 改派給 Fallback Role 時的原因；其他為 null。 */
   fallbackReason: fallbackReasonSchema.nullable(),
+  /** step.auto_approved：自動核准的審批步驟（這種事件沒有 Task）；其他為 null。不含自動核准的條件。 */
+  node: z.object({ id: z.string(), name: z.string() }).nullable(),
 });
 export type RequestEvent = z.infer<typeof requestEventSchema>;
 

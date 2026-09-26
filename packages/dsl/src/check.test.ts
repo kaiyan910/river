@@ -389,4 +389,65 @@ describe('DSL 檢查', () => {
       ]);
     });
   });
+
+  describe('自動核准', () => {
+    const autoApproving = (expression: string): ProcessNode => ({
+      id: 'manager',
+      type: 'approval',
+      name: '審批 manager',
+      assignee: { type: 'participant', participantId: 'p-1' },
+      autoApprove: { expression },
+      position: at,
+    });
+    const withAutoApproval = (expression: string): ProcessDsl => ({
+      ...minimal(),
+      nodes: [start(), autoApproving(expression), end()],
+    });
+
+    it('審批節點設定了合法的表達式時沒有錯誤', () => {
+      expect(checkProcess(withAutoApproval('amount < 1000'))).toEqual([]);
+    });
+
+    it('DSL schema 接受審批節點的自動核准設定，沒有設定的舊 DSL 也照常接受', () => {
+      const dsl = withAutoApproval('amount < 1000');
+      expect(processDslSchema.parse(dsl)).toEqual(dsl);
+      expect(processDslSchema.parse(minimal())).toEqual(minimal());
+    });
+
+    it('填表節點沒有自動核准設定', () => {
+      const dsl = {
+        ...minimal(),
+        nodes: [start(), { ...formNode('fill'), autoApprove: { expression: 'true' } }, end()],
+      };
+      expect(processDslSchema.parse(dsl).nodes[1]).not.toHaveProperty('autoApprove');
+    });
+
+    it('啟用自動核准卻沒有表達式', () => {
+      expect(checkProcess(withAutoApproval('  '))).toEqual([
+        {
+          nodeId: 'manager',
+          code: 'AUTO_APPROVAL_NO_EXPRESSION',
+          message: expect.stringContaining('審批 manager'),
+        },
+      ]);
+    });
+
+    it('JSONata 語法錯誤標在審批節點上，沒有 edgeId', () => {
+      expect(checkProcess(withAutoApproval('amount <'))).toEqual([
+        {
+          nodeId: 'manager',
+          code: 'INVALID_JSONATA',
+          message: expect.not.stringContaining('[object Object]'),
+        },
+      ]);
+    });
+
+    it('設定了自動核准的審批節點仍然必須指派審批人', () => {
+      const dsl = withAutoApproval('amount < 1000');
+      dsl.nodes[1] = { ...autoApproving('amount < 1000'), assignee: null } as ProcessNode;
+      expect(checkProcess(dsl).map((e) => [e.code, e.nodeId])).toEqual([
+        ['APPROVAL_NO_ASSIGNEE', 'manager'],
+      ]);
+    });
+  });
 });

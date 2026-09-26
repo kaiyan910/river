@@ -2,6 +2,7 @@ import '@xyflow/react/dist/style.css';
 import type { MeResponse, Process, ProcessSummary, ProcessVersion } from '@river/contracts';
 import {
   type Assignee,
+  type AutoApprove,
   type Branch,
   type DslError,
   formIdOf,
@@ -29,6 +30,7 @@ import {
   Users,
   Workflow,
   X,
+  Zap,
 } from 'lucide-react';
 import { type DragEvent, type FormEvent, useMemo, useRef, useState } from 'react';
 import { Avatar, PersonPicker } from '@/components/people';
@@ -251,6 +253,7 @@ function ProcessEditor({ process, me }: { process: Process; me: MeResponse }) {
   const [formTab, setFormTab] = useState<string | null>(null);
   const base = useMemo(() => workingDsl(process), [process]);
   const canvas = useProcessCanvas(base);
+  const fieldKeys = fieldKeysOf(canvas.nodes, canvas.forms);
   const dirty = !sameDsl(canvas.dsl, base);
   const [problemsOpen, setProblemsOpen] = useState(true);
   const [publishing, setPublishing] = useState(false);
@@ -495,12 +498,13 @@ function ProcessEditor({ process, me }: { process: Process; me: MeResponse }) {
                 key={canvas.selected.id}
                 node={canvas.selected}
                 forms={canvas.forms}
+                fieldKeys={fieldKeys}
                 branches={
                   canvas.selected.type === 'condition' ? (
                     <BranchesField
                       outgoing={canvas.edges.filter((e) => e.source === canvas.selected?.id)}
                       nodes={canvas.nodes}
-                      forms={canvas.forms}
+                      fieldKeys={fieldKeys}
                       errors={canvas.selected.data.errors}
                       onChange={canvas.updateBranch}
                       onMove={canvas.moveEdge}
@@ -679,6 +683,7 @@ function Palette({ onAdd }: { onAdd: (type: NodeType) => void }) {
 function Inspector({
   node,
   forms,
+  fieldKeys,
   branches,
   onChange,
   onRemove,
@@ -688,6 +693,8 @@ function Inspector({
 }: {
   node: RFNode;
   forms: FormSchema[];
+  /** 表達式可以用的欄位代碼（審批節點的自動核准條件用）。 */
+  fieldKeys: string[];
   /** 條件節點的出邊設定；其他節點為 null。 */
   branches: React.ReactNode;
   onChange: (patch: Partial<NodeSettings>) => void;
@@ -726,6 +733,16 @@ function Inspector({
           label={settings.type === 'form' ? '填表人' : '審批人'}
           assignee={settings.assignee}
           onChange={(assignee) => onChange({ assignee })}
+        />
+      )}
+      {settings.type === 'approval' && (
+        <AutoApproveField
+          autoApprove={settings.autoApprove ?? null}
+          fieldKeys={fieldKeys}
+          invalid={node.data.errors.some(
+            (e) => e.code === 'AUTO_APPROVAL_NO_EXPRESSION' || e.code === 'INVALID_JSONATA',
+          )}
+          onChange={(autoApprove) => onChange({ autoApprove })}
         />
       )}
       {(settings.type === 'start' || settings.type === 'form') && (
@@ -806,22 +823,18 @@ function Inspector({
 function BranchesField({
   outgoing,
   nodes,
-  forms,
+  fieldKeys,
   errors,
   onChange,
   onMove,
 }: {
   outgoing: RFEdge[];
   nodes: RFNode[];
-  forms: FormSchema[];
+  fieldKeys: string[];
   errors: DslError[];
   onChange: (edgeId: string, branch: Branch) => void;
   onMove: (edgeId: string, delta: -1 | 1) => void;
 }) {
-  const used = new Set(nodes.map((n) => formIdOf(n.data.node)));
-  const keys = [
-    ...new Set(forms.filter((f) => used.has(f.id)).flatMap((f) => f.fields.map((x) => x.key))),
-  ];
   const targetName = (id: string) => nodes.find((n) => n.id === id)?.data.node.name || '（未命名）';
   return (
     <div className="grid gap-2">
@@ -905,17 +918,82 @@ function BranchesField({
           );
         })}
       </ol>
-      {keys.length > 0 && (
-        <div className="grid gap-1">
-          <span className="text-[0.8em] text-muted-foreground">可用的欄位代碼</span>
-          <div className="flex flex-wrap gap-1">
-            {keys.map((k) => (
-              <code key={k} className="rounded bg-muted px-1.5 py-0.5 text-[0.8em]">
-                {k}
-              </code>
-            ))}
-          </div>
-        </div>
+      <FieldKeys keys={fieldKeys} />
+    </div>
+  );
+}
+
+/** 流程裡有節點使用的 Form 的欄位代碼：JSONata 表達式用欄位代碼讀取這一輪填過的 Form 資料。 */
+function fieldKeysOf(nodes: RFNode[], forms: FormSchema[]): string[] {
+  const used = new Set(nodes.map((n) => formIdOf(n.data.node)));
+  return [
+    ...new Set(forms.filter((f) => used.has(f.id)).flatMap((f) => f.fields.map((x) => x.key))),
+  ];
+}
+
+function FieldKeys({ keys }: { keys: string[] }) {
+  if (keys.length === 0) return null;
+  return (
+    <div className="grid gap-1">
+      <span className="text-[0.8em] text-muted-foreground">可用的欄位代碼</span>
+      <div className="flex flex-wrap gap-1">
+        {keys.map((k) => (
+          <code key={k} className="rounded bg-muted px-1.5 py-0.5 text-[0.8em]">
+            {k}
+          </code>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * 審批節點的 Auto-approval：條件成立時由系統直接核准這一步，不建立 Task；
+ * 不成立或無法判斷時照常交給審批人，所以審批人仍然必須指派。
+ * 關閉時保留 null，打開時表達式先是空白，發佈前由檢查器要求填寫。
+ */
+function AutoApproveField({
+  autoApprove,
+  fieldKeys,
+  invalid,
+  onChange,
+}: {
+  autoApprove: AutoApprove | null;
+  fieldKeys: string[];
+  invalid: boolean;
+  onChange: (autoApprove: AutoApprove | null) => void;
+}) {
+  return (
+    <div className="grid gap-1.5">
+      <label className="flex items-center gap-1.5 text-[0.85em]">
+        <input
+          type="checkbox"
+          checked={autoApprove !== null}
+          onChange={(e) => onChange(e.target.checked ? { expression: '' } : null)}
+        />
+        <Zap size={13} className="text-muted-foreground" aria-hidden />
+        條件成立時自動核准
+      </label>
+      {autoApprove && (
+        <>
+          <label htmlFor="auto-approve" className="sr-only">
+            自動核准的條件
+          </label>
+          <textarea
+            id="auto-approve"
+            value={autoApprove.expression}
+            rows={2}
+            spellCheck={false}
+            placeholder="例如：amount < 1000"
+            aria-invalid={invalid || undefined}
+            onChange={(e) => onChange({ expression: e.target.value })}
+            className="w-full rounded-md border border-input bg-card px-2 py-1 font-mono text-[0.85em] aria-invalid:border-destructive"
+          />
+          <p className="text-[0.8em] text-muted-foreground">
+            不成立或無法判斷時照常交給審批人。申請人看不到這個條件。
+          </p>
+          <FieldKeys keys={fieldKeys} />
+        </>
       )}
     </div>
   );

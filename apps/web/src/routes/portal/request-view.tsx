@@ -243,14 +243,22 @@ type StepState = 'done' | 'current' | 'advancing' | 'returned' | 'todo';
 /**
  * 每一步在目前這一輪的狀態：已完成、目前（有 open Task）、處理中（workflow 正在走到這一步）、還沒到。
  * 被 Return 的那一步標成 returned；重新送出後先前的核准都失效，所以只看這一輪的 Task。
+ * 自動核准的步驟沒有 Task，看這一輪（最後一次重新送出之後）的 step.auto_approved 事件。
  */
 function stepStates(request: RequestDetail): StepState[] {
   let previousDone = true;
   const tasks = request.tasks.filter((t) => t.round === request.round);
+  const roundStart = request.events.findLastIndex((e) => e.type === 'request.resubmitted');
+  const autoApproved = new Set(
+    request.events
+      .slice(roundStart + 1)
+      .flatMap((e) => (e.type === 'step.auto_approved' && e.node ? [e.node.id] : [])),
+  );
   return request.steps.map((step) => {
     let state: StepState;
     if (step.type === 'start') state = 'done';
     else if (step.type === 'end') state = request.status === 'completed' ? 'done' : 'todo';
+    else if (autoApproved.has(step.nodeId)) state = 'done';
     else {
       const task = tasks.findLast((t) => t.nodeId === step.nodeId);
       state =
@@ -345,6 +353,8 @@ function describeEvent(e: RequestEvent): string {
       return `${e.actor?.name} 在「${e.task?.nodeName}」Return，退回給發起人修改`;
     case 'task.superseded':
       return `「${e.task?.nodeName}」的 Task 已作廢`;
+    case 'step.auto_approved':
+      return `「${e.node?.name}」符合條件，自動核准`;
     case 'request.resubmitted':
       return `${e.actor?.name} 修改後重新送出，從頭開始審批`;
     case 'request.withdrawn':

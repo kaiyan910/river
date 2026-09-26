@@ -57,6 +57,13 @@
       "when": 1790399919148,
       "tag": "0007_manager_fallback",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1790403659420,
+      "tag": "0008_auto_approval",
+      "breakpoints": true
     }
   ]
 }

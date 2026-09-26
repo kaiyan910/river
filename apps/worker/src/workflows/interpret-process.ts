@@ -18,7 +18,7 @@ import {
 } from '@temporalio/workflow';
 import type { Activities, CreateTaskInput } from '../activities.js';
 
-const { loadProcessVersion, createTask, evaluateCondition, completeRequest } =
+const { loadProcessVersion, createTask, evaluateCondition, evaluateAutoApproval, completeRequest } =
   proxyActivities<Activities>({
     startToCloseTimeout: '30 seconds',
   });
@@ -32,6 +32,8 @@ export const withdrawSignal = defineSignal(WITHDRAW_SIGNAL);
  * 審批與填表節點建立 Task，等到 API 送來這個 Task 的 taskCompleted Signal 才往下走。
  * 填表的資料由 API 存進 Postgres，workflow 只知道 Task 完成了。
  * 條件節點交給 evaluateCondition activity 讀取資料、執行 JSONata，workflow 只拿到選中的出邊 ID。
+ * 設定了 Auto-approval 的審批節點先交給 evaluateAutoApproval：成立時不建立 Task，直接往下走；
+ * 不成立或無法判斷時照常建立 Task。重新送出後從頭再跑一次，所以每一輪都重新判斷。
  *
  * Return、重新送出與 Withdraw 的狀態變化都由 API 在同一個 transaction 寫進 Postgres，workflow 只負責流轉：
  * - Task 被 Return：停下來，等發起人重新送出或 Withdraw。
@@ -78,6 +80,15 @@ export async function interpretProcess({
       const edgeId = await evaluateCondition({ requestId, processVersionId, nodeId: node.id });
       if (!interrupted()) node = next(node, edgeId);
       continue;
+    }
+    // 審批節點的 autoApprove 是新的設定，舊的 history 裡不會出現；沒有設定的節點不會多呼叫 activity，
+    // 行為和原本完全一樣，所以不需要 patched()。
+    if (node.type === 'approval' && node.autoApprove) {
+      const approved = await evaluateAutoApproval({ requestId, processVersionId, nodeId: node.id });
+      if (approved) {
+        if (!interrupted()) node = next(node);
+        continue;
+      }
     }
     if (node.type === 'approval' || node.type === 'form') {
       // 發佈前檢查（APPROVAL_NO_ASSIGNEE、FORM_NODE_NO_ASSIGNEE）已經擋下；
