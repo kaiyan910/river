@@ -22,6 +22,9 @@ export interface NavItem {
   requires?: Permission | readonly Permission[];
 }
 
+/** 帳號安全（兩步驟驗證）；不在 icon rail 的分組裡，放在登出按鈕旁邊。 */
+export const ACCOUNT_SECURITY_PATH = '/account/security';
+
 export const HOME: NavItem = { to: '/', label: '首頁', icon: House };
 export const START_REQUEST: NavItem = { to: '/start', label: '發起申請', icon: Plus };
 export const PARTICIPANTS: NavItem = {

@@ -1,3 +1,4 @@
+import { requiresTotp } from '@river/auth';
 import { type MeResponse, meResponseSchema } from '@river/contracts';
 import { queryOptions } from '@tanstack/react-query';
 
@@ -12,3 +13,8 @@ export const meQueryOptions = queryOptions({
   },
   staleTime: 60_000,
 });
+
+/** 持有需要 TOTP 的 Permission，但還沒啟用 TOTP：那些 Permission 暫時不能使用，要引導去設定。 */
+export function needsTotpSetup(me: MeResponse): boolean {
+  return !me.twoFactorEnabled && me.permissions.some(requiresTotp);
+}

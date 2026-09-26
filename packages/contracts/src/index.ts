@@ -9,9 +9,17 @@ export const meResponseSchema = z.object({
   name: z.string(),
   email: z.email(),
   permissions: z.array(z.enum(PERMISSIONS)),
+  /** 是否已啟用 TOTP；持有需要 TOTP 的 Permission 但還沒啟用時，那些 Permission 暫時不能使用。 */
+  twoFactorEnabled: z.boolean(),
 });
 
 export type MeResponse = z.infer<typeof meResponseSchema>;
+
+/**
+ * 持有需要 TOTP 的 Permission、但還沒啟用 TOTP 時，那些 API 回 403，錯誤回應的 `code` 是這個值，
+ * 讓 UI 可以和「沒有 Permission」區分，引導去設定 TOTP。
+ */
+export const TOTP_REQUIRED_ERROR_CODE = 'TOTP_REQUIRED';
 
 const permissionList = z.array(z.enum(PERMISSIONS));
 
@@ -112,6 +120,9 @@ export type ImportParticipantsResult = z.infer<typeof importParticipantsResultSc
 
 /** 邀請連結的有效時間；信件內容與設定密碼頁的說明都以它為準。 */
 export const INVITATION_EXPIRES_IN_HOURS = 72;
+
+/** 重設密碼連結的有效時間；信件內容與重設密碼頁的說明都以它為準。 */
+export const PASSWORD_RESET_EXPIRES_IN_MINUTES = 60;
 
 /** `GET /api/invitations/:token`：設定密碼頁顯示的資訊。連結失效時回 404。 */
 export const invitationSchema = z.object({ name: z.string(), email: z.email() });

@@ -15,11 +15,12 @@ const env = apiEnvSchema.parse(process.env);
 const emailEnv = emailEnvSchema.parse(process.env);
 const database = connectDatabase(env.DATABASE_URL);
 const connection = await Connection.connect({ address: env.TEMPORAL_ADDRESS });
+const emailSender = createEmailSender(emailEnv);
 
 const app = await createApp({
   db: database.db,
-  auth: createAuth(database.db, authOptionsFromEnv(env)),
-  emailSender: createEmailSender(emailEnv),
+  auth: createAuth(database.db, { ...authOptionsFromEnv(env), emailSender }),
+  emailSender,
   appUrl: env.BETTER_AUTH_URL,
   storage: new S3AttachmentStorage(s3ConfigFromEnv(storageEnvSchema.parse(process.env))),
   temporal: new Client({ connection, namespace: env.TEMPORAL_NAMESPACE }),
