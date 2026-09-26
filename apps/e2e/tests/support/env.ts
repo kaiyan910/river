@@ -5,6 +5,11 @@ export const env = {
   mailpitURL: process.env.E2E_MAILPIT_URL ?? 'http://localhost:8025',
   adminEmail: required('SEED_ADMIN_EMAIL'),
   adminPassword: required('SEED_ADMIN_PASSWORD'),
+  /**
+   * Administrator 已經自行啟用 TOTP 時，他驗證器的 otpauth:// URI（啟用時 QR code 的內容）。
+   * 沒有啟用時不需要：smoke 會暫時替他啟用、結束後停用（見 accounts.ts）。
+   */
+  adminTotpURI: process.env.E2E_ADMIN_TOTP_URI || undefined,
 };
 
 function required(name: string): string {

@@ -58,7 +58,8 @@ replay 測試在本機也可以單獨執行：`bun run --cwd apps/worker test`�
 
 - 測試不自行啟動任何服務，對已經執行中的完整環境（`E2E_BASE_URL`，預設 Caddy 的 `http://localhost:8000`）執行。
 - 帳號由 `seed:admin` 建立的 Administrator（`.env` 的 `SEED_ADMIN_EMAIL`、`SEED_ADMIN_PASSWORD`）透過 API 建立，邀請信從 Mailpit（`E2E_MAILPIT_URL`，預設 `http://localhost:8025`）取出後設定密碼。每次執行都用新的 email、Process 與 Request 名稱，可以直接對開發環境重複執行。
-- 登入集中在 `tests/support/session.ts`：登入流程改變時（例如持有敏感 Permission 的人要輸入 TOTP）只改這裡。
+- 登入集中在 `tests/support/session.ts`，TOTP 集中在 `tests/support/totp.ts`：持有 `user.manage`、`process.publish`、`credential.manage` 的人必須啟用 TOTP，smoke 建立的 Designer 會以 Better Auth 的 API 啟用 TOTP，登入時由 otpauth URI 算出驗證碼。
+- Administrator 同樣需要 TOTP 才能建立 Participant：還沒啟用時 smoke 暫時替他啟用、結束時停用；已經自行啟用時（例如在開發環境的帳號安全頁設定過），要以 `E2E_ADMIN_TOTP_URI` 提供他驗證器的 `otpauth://` URI，否則 smoke 會直接說明原因並失敗。
 
 本機執行（開發環境已經依 `deploy/README.md` 啟動）：
 
