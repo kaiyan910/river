@@ -164,6 +164,10 @@ function progressOf(request: RequestDetail): RequestProgress {
   });
   for (const node of request.flow.nodes)
     if (!states.has(node.id)) states.set(node.id, stateOf(node));
+  // 路徑只記得走進匯合節點的其中一條連線；其他分支完成時，它走進匯合節點的連線也算走過。
+  for (const e of request.flow.edges)
+    if (byId.get(e.target)?.type === 'parallelJoin' && states.get(e.source) === 'done')
+      walked.add(e.id);
 
   const captions = new Map(
     request.flow.nodes.map((node) => {
