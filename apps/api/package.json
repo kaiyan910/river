@@ -9,6 +9,7 @@
     "start": "node --env-file-if-exists=../../.env dist/main.js",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
+    "replay:record": "RECORD_REPLAY_HISTORIES=1 vitest run test/record-replay-histories.test.ts",
     "seed:admin": "node --env-file-if-exists=../../.env --conditions=source --import @swc-node/register/esm-register src/scripts/seed-admin.ts",
     "setup:storage": "node --env-file-if-exists=../../.env --conditions=source --import @swc-node/register/esm-register src/scripts/setup-storage.ts"
   },
@@ -45,6 +46,7 @@
     "@river/worker": "workspace:*",
     "@swc-node/register": "^1.12.1",
     "@swc/core": "^1.16.2",
+    "@temporalio/common": "^1.24.0",
     "@temporalio/testing": "^1.24.0",
     "@temporalio/worker": "^1.24.0",
     "@testcontainers/postgresql": "^12.1.0",

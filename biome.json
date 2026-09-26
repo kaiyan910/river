@@ -6,7 +6,7 @@
     "useIgnoreFile": true
   },
   "files": {
-    "includes": ["**", "!.scratch", "!**/drizzle/meta"]
+    "includes": ["**", "!.scratch", "!**/drizzle/meta", "!apps/worker/test/histories"]
   },
   "formatter": {
     "indentStyle": "space",
