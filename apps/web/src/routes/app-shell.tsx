@@ -8,8 +8,9 @@ import { authClient } from '@/lib/auth-client';
 import { needsTotpSetup } from '@/lib/me';
 import { cn } from '@/lib/utils';
 import { ACCOUNT_SECURITY_PATH, visibleNavGroups } from '@/navigation';
+import { MobileNav } from './mobile-nav';
 
-/** 登入後的外框：C「控制台」版面的 icon rail，右側兩欄由各頁面決定。 */
+/** 登入後的外框：C「控制台」版面的 icon rail，右側兩欄由各頁面決定；手機版改用 MobileNav。 */
 export function AppShell({ me }: { me: MeResponse }) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
@@ -23,19 +24,19 @@ export function AppShell({ me }: { me: MeResponse }) {
   }
 
   return (
-    <div className="grid min-h-screen grid-cols-1 md:h-screen md:grid-cols-[56px_300px_minmax(0,1fr)] xl:grid-cols-[56px_360px_minmax(0,1fr)]">
+    // 手機版是 flex column：header 與清單照內容高度，最後一個區塊撐滿剩下的高度，避免 grid 把多的高度平均分給每一列。
+    <div className="flex min-h-screen flex-col *:last:flex-1 md:grid md:h-screen md:grid-cols-[56px_300px_minmax(0,1fr)] xl:grid-cols-[56px_360px_minmax(0,1fr)]">
+      <MobileNav me={me} totpPending={totpPending} onSignOut={signOut} />
       <nav
         aria-label="主要導覽"
-        className="sticky top-0 z-10 flex items-center gap-1 overflow-x-auto border-sidebar-border border-b bg-sidebar px-2 py-1.5 text-sidebar-foreground md:static md:flex-col md:border-r md:border-b-0 md:px-0 md:py-3"
+        className="hidden flex-col items-center gap-1 border-sidebar-border border-r bg-sidebar py-3 text-sidebar-foreground md:flex"
       >
-        <div className="mx-1.5 grid h-[38px] place-items-center text-sidebar-primary md:mx-0 md:mb-3">
+        <div className="mb-3 grid h-[38px] place-items-center text-sidebar-primary">
           <Logo />
         </div>
         {visibleNavGroups(me.permissions).map((group, i) => (
           <Fragment key={group[0]?.to}>
-            {i > 0 && (
-              <div className="my-1.5 hidden h-px w-[22px] shrink-0 bg-sidebar-border md:block" />
-            )}
+            {i > 0 && <div className="my-1.5 h-px w-[22px] shrink-0 bg-sidebar-border" />}
             {group.map((item) => (
               <Link
                 key={item.to}
@@ -43,7 +44,7 @@ export function AppShell({ me }: { me: MeResponse }) {
                 title={item.label}
                 aria-label={item.label}
                 activeOptions={{ exact: item.to === '/' }}
-                className="relative grid size-[38px] shrink-0 place-items-center rounded-lg text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground data-[status=active]:bg-sidebar-accent data-[status=active]:text-sidebar-accent-foreground md:data-[status=active]:before:absolute md:data-[status=active]:before:top-[9px] md:data-[status=active]:before:bottom-[9px] md:data-[status=active]:before:left-[-9px] md:data-[status=active]:before:w-0.5 md:data-[status=active]:before:rounded-sm md:data-[status=active]:before:bg-sidebar-primary"
+                className="relative grid size-[38px] shrink-0 place-items-center rounded-lg text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground data-[status=active]:bg-sidebar-accent data-[status=active]:text-sidebar-accent-foreground data-[status=active]:before:absolute data-[status=active]:before:top-[9px] data-[status=active]:before:bottom-[9px] data-[status=active]:before:left-[-9px] data-[status=active]:before:w-0.5 data-[status=active]:before:rounded-sm data-[status=active]:before:bg-sidebar-primary"
               >
                 <item.icon size={18} strokeWidth={1.75} aria-hidden />
               </Link>
@@ -77,7 +78,7 @@ export function AppShell({ me }: { me: MeResponse }) {
         </button>
         <div
           title={`${me.name} · ${me.email}`}
-          className="ml-1 grid size-[30px] shrink-0 place-items-center rounded-full bg-sidebar-accent font-semibold text-[0.8em] text-sidebar-accent-foreground md:mt-1.5 md:ml-0"
+          className="mt-1.5 grid size-[30px] shrink-0 place-items-center rounded-full bg-sidebar-accent font-semibold text-[0.8em] text-sidebar-accent-foreground"
         >
           {me.name.slice(0, 1)}
         </div>
@@ -98,7 +99,7 @@ export function AppShell({ me }: { me: MeResponse }) {
               立即設定
             </Link>
           </div>
-          <div className="grid min-h-0 flex-1 grid-cols-1 md:grid-cols-[300px_minmax(0,1fr)] xl:grid-cols-[360px_minmax(0,1fr)]">
+          <div className="flex min-h-0 flex-1 flex-col *:last:flex-1 md:grid md:grid-cols-[300px_minmax(0,1fr)] xl:grid-cols-[360px_minmax(0,1fr)]">
             <Outlet />
           </div>
         </div>

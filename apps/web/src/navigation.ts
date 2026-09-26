@@ -120,3 +120,17 @@ const IMPLEMENTED: NavItem[] = [
 export const PLACEHOLDER_ITEMS: NavItem[] = NAV_GROUPS.flat().filter(
   (i) => !IMPLEMENTED.includes(i),
 );
+
+/** 手機版頂部列顯示的頁名：取 `to` 與目前路徑最長前綴相符的導覽項目。 */
+export function currentPageLabel(pathname: string): string | undefined {
+  const candidates = [...NAV_GROUPS.flat(), { to: ACCOUNT_SECURITY_PATH, label: '帳號安全' }];
+  let best: { to: string; label: string } | undefined;
+  for (const item of candidates) {
+    const matches =
+      item.to === '/'
+        ? pathname === '/'
+        : pathname === item.to || pathname.startsWith(`${item.to}/`);
+    if (matches && (!best || item.to.length > best.to.length)) best = item;
+  }
+  return best?.label;
+}
