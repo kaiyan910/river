@@ -1,5 +1,7 @@
 import { Module } from '@nestjs/common';
 import { RequestModule } from '../request/request.module.js';
+import { ExternalProcessesController } from './external-processes.controller.js';
+import { ExternalProcessesService } from './external-processes.service.js';
 import { ExternalRequestsController } from './external-requests.controller.js';
 import { ExternalRequestsService } from './external-requests.service.js';
 import { ServiceAccountGuard } from './require-service-account.js';
@@ -20,7 +22,7 @@ export class ServiceAccountModule {}
  */
 @Module({
   imports: [ServiceAccountModule, RequestModule],
-  controllers: [ExternalRequestsController],
-  providers: [ExternalRequestsService],
+  controllers: [ExternalProcessesController, ExternalRequestsController],
+  providers: [ExternalProcessesService, ExternalRequestsService],
 })
 export class ExternalApiModule {}

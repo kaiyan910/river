@@ -1,6 +1,8 @@
 import { PERMISSION_PRESETS, type Permission } from '@river/auth';
 import type {
   AttachmentUpload,
+  ExternalProcess,
+  ExternalProcessDetail,
   ExternalRequest,
   IssuedApiKey,
   MyTask,
@@ -516,6 +518,154 @@ describe('Service Account 與外部 API', () => {
     expect(listB).toEqual([]);
   });
 
+  it('外部系統列得出被授權發起的 Process，調整授權範圍後立刻反映', async () => {
+    const issued = await createServiceAccount('清單測試', [purchaseId, equipmentId]);
+    const external = app.anonymous.withApiKey(issued.apiKey);
+
+    const res = await external.get('/api/external/processes');
+    expect(res.status).toBe(200);
+    const list = (await res.json()) as ExternalProcess[];
+    expect(list.map((p) => [p.id, p.name, p.version])).toEqual([
+      [equipmentId, '入職設備申請', 1],
+      [purchaseId, '採購申請', 1],
+    ]);
+    expect(Object.keys(list[0] ?? {}).sort()).toEqual(['id', 'name', 'publishedAt', 'version']);
+    expect(Number.isNaN(Date.parse(list[0]?.publishedAt ?? ''))).toBe(false);
+
+    expect(
+      (
+        await admin.put(`/api/service-accounts/${issued.serviceAccount.id}/processes`, {
+          processIds: [purchaseId],
+        })
+      ).status,
+    ).toBe(200);
+    const after = (await (
+      await external.get('/api/external/processes')
+    ).json()) as ExternalProcess[];
+    expect(after.map((p) => p.id)).toEqual([purchaseId]);
+
+    const none = await createServiceAccount('清單測試－空', []);
+    const empty = await app.anonymous.withApiKey(none.apiKey).get('/api/external/processes');
+    expect(await empty.json()).toEqual([]);
+
+    expect((await app.anonymous.get('/api/external/processes')).status).toBe(401);
+    expect((await employee.get('/api/external/processes')).status).toBe(401);
+  });
+
+  it('外部系統查得到 Process 目前版本的開始表單欄位；沒被授權或不存在的回 404', async () => {
+    const expense: FormSchema = {
+      id: 'expense',
+      name: '報銷單',
+      fields: [
+        {
+          id: 'f1',
+          key: 'amount',
+          type: 'money',
+          label: '金額',
+          required: true,
+          help: '新台幣',
+          rules: { min: 1 },
+        },
+        {
+          id: 'f2',
+          key: 'category',
+          type: 'radio',
+          label: '類別',
+          required: false,
+          rules: {},
+          options: ['交通', '餐費'],
+        },
+        {
+          id: 'f3',
+          key: 'items',
+          type: 'table',
+          label: '明細',
+          required: false,
+          rules: {},
+          columns: [
+            { id: 'c1', key: 'desc', type: 'text', label: '說明', required: true, rules: {} },
+          ],
+        },
+      ],
+    };
+    const dsl = oneApproval({ type: 'role', roleId: hrRoleId });
+    const expenseId = await publish('報銷申請', {
+      ...dsl,
+      nodes: dsl.nodes.map((n) => (n.type === 'start' ? { ...n, formId: 'expense' } : n)),
+      forms: [expense],
+    });
+    const plainDsl = oneApproval({ type: 'role', roleId: hrRoleId });
+    const plainId = await publish('無表單申請', {
+      ...plainDsl,
+      nodes: plainDsl.nodes.map((n) => (n.type === 'start' ? { ...n, formId: undefined } : n)),
+      forms: [],
+    });
+    const issued = await createServiceAccount('欄位測試', [expenseId, plainId]);
+    const external = app.anonymous.withApiKey(issued.apiKey);
+
+    const res = await external.get(`/api/external/processes/${expenseId}`);
+    expect(res.status).toBe(200);
+    const detail = (await res.json()) as ExternalProcessDetail;
+    expect(detail).toMatchObject({ id: expenseId, name: '報銷申請', version: 1 });
+    expect(detail.startForm?.fields).toEqual([
+      {
+        key: 'amount',
+        type: 'money',
+        label: '金額',
+        required: true,
+        help: '新台幣',
+        rules: { min: 1 },
+      },
+      {
+        key: 'category',
+        type: 'radio',
+        label: '類別',
+        required: false,
+        rules: {},
+        options: ['交通', '餐費'],
+      },
+      {
+        key: 'items',
+        type: 'table',
+        label: '明細',
+        required: false,
+        rules: {},
+        columns: [{ key: 'desc', type: 'text', label: '說明', required: true, rules: {} }],
+      },
+    ]);
+
+    const plain = (await (
+      await external.get(`/api/external/processes/${plainId}`)
+    ).json()) as ExternalProcessDetail;
+    expect(plain.startForm).toBeNull();
+
+    // Designer 發佈新版本後，回傳新的版本與開始表單。
+    const renamed = { ...expense, fields: [{ ...expense.fields[0], key: 'total' }] } as FormSchema;
+    expect(
+      (
+        await designer.put(`/api/processes/${expenseId}/draft`, {
+          dsl: {
+            ...dsl,
+            nodes: dsl.nodes.map((n) => (n.type === 'start' ? { ...n, formId: 'expense' } : n)),
+            forms: [renamed],
+          },
+        })
+      ).status,
+    ).toBe(200);
+    expect((await designer.post(`/api/processes/${expenseId}/versions`, {})).status).toBe(201);
+    const v2 = (await (
+      await external.get(`/api/external/processes/${expenseId}`)
+    ).json()) as ExternalProcessDetail;
+    expect(v2.version).toBe(2);
+    expect(v2.startForm?.fields.map((f) => f.key)).toEqual(['total']);
+
+    expect((await external.get(`/api/external/processes/${equipmentId}`)).status).toBe(404);
+    expect(
+      (await external.get('/api/external/processes/00000000-0000-4000-8000-000000000000')).status,
+    ).toBe(404);
+    expect((await external.get('/api/external/processes/not-a-uuid')).status).toBe(400);
+  });
+
   it('外部 API 有 OpenAPI 文件，只包含外部 API', async () => {
     const res = await app.anonymous.get('/api/external/docs-json');
     expect(res.status).toBe(200);
@@ -529,6 +679,8 @@ describe('Service Account 與外部 API', () => {
     };
     expect(doc.openapi).toMatch(/^3\./);
     expect(Object.keys(doc.paths).sort()).toEqual([
+      '/api/external/processes',
+      '/api/external/processes/{id}',
       '/api/external/requests',
       '/api/external/requests/{id}',
     ]);

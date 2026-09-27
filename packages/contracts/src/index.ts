@@ -1,6 +1,6 @@
 import { PERMISSIONS } from '@river/auth';
 import { branchSchema, DSL_ERROR_CODES, processDslSchema } from '@river/dsl';
-import { formSchema } from '@river/forms';
+import { FIELD_TYPES, fieldRulesSchema, formSchema, TABLE_COLUMN_TYPES } from '@river/forms';
 import { z } from 'zod';
 
 /** `GET /api/me`：目前登入的 Participant。 */
@@ -767,6 +767,52 @@ export const externalRequestSchema = z.object({
 });
 export type ExternalRequest = z.infer<typeof externalRequestSchema>;
 export const externalRequestListSchema = z.array(externalRequestSchema);
+
+/** `GET /api/external/processes`：這個 Service Account 被授權發起的 Process，帶目前 Process Version。 */
+export const externalProcessSchema = z.object({
+  id: z.string().describe('發起 Request 時的 processId。'),
+  name: z.string(),
+  version: z
+    .number()
+    .int()
+    .positive()
+    .describe('目前 Process Version；發起時使用這個版本。版本變了代表開始表單可能也變了。'),
+  publishedAt: z.iso.datetime().describe('目前 Process Version 的發佈時間。'),
+});
+export type ExternalProcess = z.infer<typeof externalProcessSchema>;
+export const externalProcessListSchema = z.array(externalProcessSchema);
+
+/** 外部 API 的開始表單欄位；只描述怎麼填與怎麼驗證，不含 Designer 用的內部設定。 */
+const externalFieldShape = {
+  key: z.string().describe('Request 的 data 裡的鍵。'),
+  label: z.string(),
+  required: z.boolean(),
+  help: z.string().optional(),
+  rules: fieldRulesSchema.describe('驗證規則；只有適用於這種欄位的規則會生效。'),
+  options: z.array(z.string()).optional().describe('單選、多選的選項。'),
+};
+const FIELD_TYPE_NOTES =
+  'attachment：外部 API 無法填寫，帶任何值都會被拒絕。person：值是 Participant ID。table：值是每一行一個物件的陣列，鍵是 columns 的 key。';
+
+export const externalTableColumnSchema = z.object({
+  ...externalFieldShape,
+  type: z.enum(TABLE_COLUMN_TYPES).describe(FIELD_TYPE_NOTES),
+});
+export const externalFormFieldSchema = z.object({
+  ...externalFieldShape,
+  type: z.enum(FIELD_TYPES).describe(FIELD_TYPE_NOTES),
+  columns: z.array(externalTableColumnSchema).optional().describe('明細表的欄。'),
+});
+export type ExternalFormField = z.infer<typeof externalFormFieldSchema>;
+
+/** `GET /api/external/processes/:id`：Process 目前版本的開始表單欄位定義。 */
+export const externalProcessDetailSchema = externalProcessSchema.extend({
+  startForm: z
+    .object({ fields: z.array(externalFormFieldSchema) })
+    .nullable()
+    .describe('開始表單；null 代表發起時只需要標題。'),
+});
+export type ExternalProcessDetail = z.infer<typeof externalProcessDetailSchema>;
 
 // ─── Credential ──────────────────────────────────────────────────────────
 
