@@ -161,6 +161,16 @@ describe('Email 通知與 Email 節點', () => {
       (list) => list.length >= count,
     );
 
+  /**
+   * 等這個 Task 的待辦通知寄出。notify activity 寄信前會確認 Task 仍是 open，
+   * 測試太快處理掉 Task 的話，通知就被略過了，所以處理前要先等信寄出。
+   */
+  const waitForTaskMails = (task: { id: string }, count: number) =>
+    eventually(
+      () => app.emails.sent.filter((m) => m.text.includes(`${ORIGIN}/tasks?id=${task.id}`)),
+      (list) => list.length >= count,
+    );
+
   beforeAll(async () => {
     app = await startTestApp();
     const admin = (await signInAs('admin@river.test', '系統管理員', ['user.manage', 'role.manage']))
@@ -445,6 +455,7 @@ describe('Email 通知與 Email 節點', () => {
       amount: secrets.amount,
     });
     const receiptTask = await waitForTask(request.id, clerk);
+    await waitForTaskMails(receiptTask, 1);
     expect(
       (
         await complete(clerk, receiptTask, {
@@ -455,6 +466,7 @@ describe('Email 通知與 Email 節點', () => {
     ).toBe(200);
     const finance = await signInAsExisting('finance.a@river.test');
     const first = await waitForTask(request.id, finance);
+    await waitForTaskMails(first, 2);
     expect(
       (await complete(finance, first, { outcome: 'returned', comment: secrets.comment })).status,
     ).toBe(200);
@@ -465,11 +477,13 @@ describe('Email 通知與 Email 節點', () => {
     });
     expect(resubmitted.status).toBe(200);
     const again = await waitForTask(request.id, clerk);
+    await waitForTaskMails(again, 1);
     expect(
       (await complete(clerk, again, { outcome: 'submitted', data: { invoice: secrets.invoice } }))
         .status,
     ).toBe(200);
     const second = await waitForTask(request.id, finance);
+    await waitForTaskMails(second, 2);
     expect((await complete(finance, second, { outcome: 'approved' })).status).toBe(200);
     await eventually(
       () => detail(request.id, employee),
