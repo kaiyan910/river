@@ -353,6 +353,8 @@ describe('發起並核准 Request', () => {
     ]);
 
     // 完成之後再送也沒有影響（workflow 已經結束，Signal 送不進去）。
+    // status 是 workflow 結束前由 activity 寫入的，要等 workflow 真正結束，否則 Signal 還送得進去。
+    await handle.result();
     await expect(handle.signal(TASK_COMPLETED_SIGNAL, again)).rejects.toThrow();
     expect((await detail(request.id)).events).toEqual(done.events);
   });
